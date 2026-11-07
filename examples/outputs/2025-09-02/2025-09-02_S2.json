@@ -1,0 +1,32 @@
+{
+  "breach": true,
+  "breaches": [
+    {
+      "limit": 0.05,
+      "rule": "drift_band",
+      "symbol": "QQQ",
+      "target": 0.25,
+      "value": 0.1152
+    }
+  ],
+  "cash": 10000.0,
+  "drawdown": 0.0,
+  "rule_version": 1,
+  "run_date": "2025-09-02",
+  "sector_weights": {
+    "Broad ETF": 0.1152,
+    "Rates ETF": 0.1069,
+    "Staples": 0.1091,
+    "Tech": 0.376
+  },
+  "stage": "S2",
+  "total_value": 34156.14,
+  "weights": {
+    "AAPL": 0.1339,
+    "COST": 0.1091,
+    "IEF": 0.1069,
+    "MSFT": 0.1175,
+    "NVDA": 0.1246,
+    "QQQ": 0.1152
+  }
+}

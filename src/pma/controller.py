@@ -63,13 +63,14 @@ def run_day(ctx, day):
         results[stage] = _run_with_retries(ctx, day, stage)
         if ctx.crash_after == stage and (
                 ctx.crash_on is None or ctx.crash_on == day):
-            ctx.crash_after = None  # crash at most once per run
             crashed = True
+            crash_stage = stage
+            ctx.crash_after = None  # crash at most once per run
             log.error("%s: SIMULATED CRASH after %s", day, stage)
             break
     if crashed:
         raise SimulatedCrash("crash injected after %s on %s"
-                             % (ctx.crash_after or "?", day))
+                             % (crash_stage, day))
     return results
 
 

@@ -1,0 +1,29 @@
+{
+  "action": "REBALANCE",
+  "based_on": {
+    "S2_breaches": [
+      {
+        "limit": 0.05,
+        "rule": "drift_band",
+        "symbol": "QQQ",
+        "target": 0.25,
+        "value": 0.1152
+      }
+    ],
+    "S2_total_value": 34156.14
+  },
+  "rationale": "Breached rules at close of 2025-09-02: drift_band. Proposal trades the offending names back inside their bands (sells first, self-funding).",
+  "rule_version": 1,
+  "run_date": "2025-09-02",
+  "stage": "S3",
+  "trades": [
+    {
+      "est_notional": 4498.58,
+      "est_price": 562.32,
+      "qty": 8,
+      "reason": "weight 0.1152 -> target 0.2500",
+      "side": "BUY",
+      "symbol": "QQQ"
+    }
+  ]
+}

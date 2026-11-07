@@ -1,0 +1,32 @@
+{
+  "checks": [
+    {
+      "check": "trade_well_formed:QQQ",
+      "detail": "BUY 8 xQQQ",
+      "pass": true
+    },
+    {
+      "check": "price_consistent:QQQ",
+      "detail": "est 562.32 vs close 562.32 (dev 0.0000)",
+      "pass": true
+    },
+    {
+      "check": "cash_nonnegative_after",
+      "detail": "simulated cash 5501.42",
+      "pass": true
+    },
+    {
+      "check": "post_trade_in_band:QQQ",
+      "detail": "weight after 0.2469 vs target 0.2500",
+      "pass": true
+    }
+  ],
+  "independent_inputs": {
+    "source": "positions+cash from state, closes from cache",
+    "total_value": 34156.14
+  },
+  "run_date": "2025-09-02",
+  "stage": "S4",
+  "status": "pass",
+  "verdict": "Proposal reproduces from source data; all 4 checks passed."
+}

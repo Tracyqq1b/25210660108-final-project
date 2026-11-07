@@ -1,0 +1,53 @@
+{
+  "metrics": {
+    "baseline_buy_hold": {
+      "breach_days": 0,
+      "end_value": 35380.91,
+      "max_drawdown": -0.0094,
+      "rebalance_days": 0,
+      "turnover": 0.0
+    },
+    "candidate_drift_band_0.03": {
+      "breach_days": 1,
+      "end_value": 35685.26,
+      "max_drawdown": -0.0118,
+      "rebalance_days": 1,
+      "turnover": 7897.84
+    },
+    "candidate_drift_band_0.08": {
+      "breach_days": 1,
+      "end_value": 35660.58,
+      "max_drawdown": -0.0108,
+      "rebalance_days": 1,
+      "turnover": 4500.83
+    },
+    "current_rules_v1": {
+      "breach_days": 1,
+      "end_value": 35660.58,
+      "max_drawdown": -0.0108,
+      "rebalance_days": 1,
+      "turnover": 4500.83
+    }
+  },
+  "month": "2025-09",
+  "proposal": null,
+  "rule_version_evaluated": 1,
+  "run_date": "2025-09-30",
+  "stage": "S7",
+  "start_state": {
+    "cash": 10000.0,
+    "positions": {
+      "AAPL": 20.0,
+      "COST": 4.0,
+      "IEF": 40.0,
+      "MSFT": 8.0,
+      "NVDA": 25.0,
+      "QQQ": 7.0
+    }
+  },
+  "window": {
+    "days": 21,
+    "end": "2025-09-30",
+    "start": "2025-09-02"
+  }
+}

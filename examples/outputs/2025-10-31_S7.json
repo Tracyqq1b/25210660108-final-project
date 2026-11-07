@@ -1,0 +1,82 @@
+{
+  "metrics": {
+    "baseline_buy_hold": {
+      "breach_days": 0,
+      "end_value": 36775.21,
+      "max_drawdown": -0.0235,
+      "rebalance_days": 0,
+      "turnover": 0.0
+    },
+    "candidate_drift_band_0.03": {
+      "breach_days": 1,
+      "end_value": 36770.93,
+      "max_drawdown": -0.0242,
+      "rebalance_days": 1,
+      "turnover": 3516.12
+    },
+    "candidate_drift_band_0.08": {
+      "breach_days": 0,
+      "end_value": 36775.21,
+      "max_drawdown": -0.0235,
+      "rebalance_days": 0,
+      "turnover": 0.0
+    },
+    "current_rules_v1": {
+      "breach_days": 1,
+      "end_value": 36751.47,
+      "max_drawdown": -0.0235,
+      "rebalance_days": 1,
+      "turnover": 1835.22
+    }
+  },
+  "month": "2025-10",
+  "proposal": {
+    "change": {
+      "drift_band": 0.08
+    },
+    "evidence_key": "candidate_drift_band_0.08",
+    "new_params": {
+      "drift_band": 0.08,
+      "max_drawdown": 0.15,
+      "max_sector_weight": 0.6,
+      "max_weight": 0.35,
+      "sectors": {
+        "AAPL": "Tech",
+        "COST": "Staples",
+        "IEF": "Rates ETF",
+        "MSFT": "Tech",
+        "NVDA": "Tech",
+        "QQQ": "Broad ETF"
+      },
+      "targets": {
+        "AAPL": 0.15,
+        "COST": 0.15,
+        "IEF": 0.15,
+        "MSFT": 0.15,
+        "NVDA": 0.15,
+        "QQQ": 0.25
+      },
+      "version": 1
+    },
+    "reason": "drift_band 0.08 would have produced 0 breach days vs 1 under current rules on the fixed 2025-10 baseline replay, with turnover 0.00 vs 1835.22 and end value 36775.21 vs 36751.47"
+  },
+  "rule_version_evaluated": 1,
+  "run_date": "2025-10-31",
+  "stage": "S7",
+  "start_state": {
+    "cash": 5499.17,
+    "positions": {
+      "AAPL": 20.0,
+      "COST": 4.0,
+      "IEF": 40.0,
+      "MSFT": 8.0,
+      "NVDA": 25.0,
+      "QQQ": 15.0
+    }
+  },
+  "window": {
+    "days": 23,
+    "end": "2025-10-31",
+    "start": "2025-10-01"
+  }
+}
