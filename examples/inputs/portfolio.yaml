@@ -6,7 +6,7 @@ cash: 10000.00
 positions:
   AAPL: 20
   MSFT: 8
-  NVDA: 15
-  SPY: 6
-  TLT: 40
-  GLD: 12
+  NVDA: 25
+  QQQ: 7
+  IEF: 40
+  COST: 4
