@@ -1,0 +1,12 @@
+# Example input: portfolio definition used by the demo replay.
+# Mirrors src/config.yaml initial_state; kept here as a shareable example input.
+name: "Growth-Balanced 6"
+as_of: "2025-08-29"
+cash: 10000.00
+positions:
+  AAPL: 20
+  MSFT: 8
+  NVDA: 15
+  SPY: 6
+  TLT: 40
+  GLD: 12

@@ -1,0 +1,64 @@
+# Portfolio Monitoring & Rebalancing Agent — runtime configuration
+# All monetary values in USD. Dates are exchange trading days (America/New_York).
+
+portfolio:
+  name: "Growth-Balanced 6"
+  cash_account: "USD"
+  universe:
+    - AAPL
+    - MSFT
+    - NVDA
+    - SPY
+    - TLT
+    - GLD
+
+# Initial state used only when the state DB is initialized from scratch.
+initial_state:
+  as_of: "2025-08-29"          # last trading day before the replay window
+  cash: 10000.00
+  positions:
+    AAPL: 20
+    MSFT: 8
+    NVDA: 15
+    SPY: 6
+    TLT: 40
+    GLD: 12
+
+# Active monitoring rules. This is rule version 1; changes go through the
+# S7 rules-evaluation stage and are recorded as new versions (see docs/02).
+rules:
+  version: 1
+  max_weight: 0.35             # single-asset weight cap
+  drift_band: 0.05             # rebalance when |weight - target| > band
+  max_drawdown: 0.15           # portfolio drawdown alert from running peak
+  max_sector_weight: 0.60      # sector concentration cap (equity sectors)
+  targets:
+    AAPL: 0.15
+    MSFT: 0.15
+    NVDA: 0.15
+    SPY: 0.25
+    TLT: 0.15
+    GLD: 0.15
+  sectors:
+    AAPL: "Tech"
+    MSFT: "Tech"
+    NVDA: "Tech"
+    SPY: "Broad ETF"
+    TLT: "Rates ETF"
+    GLD: "Commodity ETF"
+
+# Sandbox execution model for S6.
+execution:
+  slippage_bps: 5              # applied against close price
+  lot_size: 1                  # shares
+  max_order_notional: 20000.0  # per-order safety cap
+
+# Long-running operation limits (enforced by the controller).
+limits:
+  max_retries: 3               # per-stage retries with exponential backoff
+  stage_timeout_sec: 300
+  daily_deadline_minutes: 120  # pipeline must finish within 2h of trigger
+  permissions:
+    network: "data-feed only (read)"
+    trading: "sandbox only"
+    filesystem: "project directory only"
