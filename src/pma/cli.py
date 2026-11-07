@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import yaml  # noqa: E402
 
-from pma import controller, datafeed, rules_eval  # noqa: E402
+from pma import controller, datafeed, rules_eval, stages  # noqa: E402
 from pma.state import StateStore  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
@@ -38,8 +38,11 @@ def build_ctx(args):
     with open(args.config) as fh:
         cfg = yaml.safe_load(fh)
     store = StateStore(args.db)
+    inbox = cfg.get("positions_inbox")
+    if inbox and not os.path.isabs(inbox):
+        inbox = os.path.join(ROOT, inbox)
     return controller.Context(
-        store, cfg, cache_dir=args.cache,
+        store, cfg, cache_dir=args.cache, inbox_dir=inbox,
         auto_approve=getattr(args, "auto_approve", False),
         crash_after=getattr(args, "crash_after", None),
         crash_on=getattr(args, "crash_on", None))
@@ -58,6 +61,36 @@ def cmd_refresh(args):
     symbols = args.symbols or ctx.cfg["portfolio"]["universe"]
     datafeed.refresh_cache(symbols, args.start, args.end, args.cache)
     print("cached %d symbols into %s" % (len(symbols), args.cache))
+
+
+def cmd_import_positions(args):
+    ctx = build_ctx(args)
+    snapshot, cash = stages.load_positions_snapshot(args.file)
+    diffs = ctx.store.diff_positions(snapshot, cash)
+    if not diffs:
+        print("positions already match recorded state; nothing to do")
+        return
+    print("discrepancies vs recorded state:")
+    for d in diffs:
+        print("  %(symbol)s: recorded %(recorded)s -> external %(external)s"
+              % d)
+    if not args.yes:
+        if input("Record as outside-workflow adjustments? [y/N] "
+                 ).strip().lower() != "y":
+            print("not applied; S1 will keep failing on this snapshot")
+            return
+    for d in diffs:
+        if d["symbol"] == "CASH":
+            ctx.store.apply_adjustment(
+                args.day, "cash", cash_delta=d["cash_delta"],
+                note="reconciled from %s" % args.file)
+        else:
+            ctx.store.apply_adjustment(
+                args.day, "external_trade", symbol=d["symbol"],
+                qty_delta=d["qty_delta"],
+                note="reconciled from %s" % args.file)
+    print("recorded %d adjustment(s) on %s; resume the day to pass S1"
+          % (len(diffs), args.day))
 
 
 def cmd_run_day(args):
@@ -196,6 +229,13 @@ def main(argv=None):
     p.add_argument("--start", required=True)
     p.add_argument("--end", required=True)
     p.add_argument("--symbols", nargs="+")
+
+    p = sub.add_parser("import-positions")
+    p.add_argument("--file", required=True,
+                   help="broker positions CSV: rows of symbol,qty and an"
+                        " optional CASH,amount row")
+    p.add_argument("--day", required=True)
+    p.add_argument("--yes", action="store_true")
 
     p = sub.add_parser("run-day")
     p.add_argument("date")

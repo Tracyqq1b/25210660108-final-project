@@ -56,6 +56,16 @@ CREATE TABLE IF NOT EXISTS trades (
     approval_id INTEGER NOT NULL REFERENCES approvals(id),
     created_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS adjustments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_date TEXT NOT NULL,
+    kind TEXT NOT NULL,              -- external_trade | dividend | split | cash
+    symbol TEXT,
+    qty_delta REAL NOT NULL DEFAULT 0,
+    cash_delta REAL NOT NULL DEFAULT 0,
+    note TEXT,
+    created_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS rule_versions (
     version INTEGER PRIMARY KEY,
     params TEXT NOT NULL,            -- JSON
@@ -147,6 +157,61 @@ class StateStore:
             sql += " WHERE run_date = ?"
             args = (run_date,)
         return [dict(r) for r in self.conn.execute(sql, args).fetchall()]
+
+    # ---- adjustments (changes outside the workflow) ---------------------
+
+    def diff_positions(self, snapshot, cash=None):
+        """Compare an external snapshot ({symbol: qty}, optional cash) with
+        recorded state. Returns a list of discrepancy dicts, empty if the
+        snapshot matches."""
+        diffs = []
+        current = self.get_positions()
+        for symbol in sorted(set(current) | set(snapshot)):
+            held = current.get(symbol, 0.0)
+            ext = snapshot.get(symbol, 0.0)
+            if abs(held - ext) > 1e-9:
+                diffs.append({"symbol": symbol, "recorded": held,
+                              "external": ext, "qty_delta": ext - held})
+        if cash is not None:
+            held_cash = self.get_cash()
+            if abs(held_cash - cash) > 1e-6:
+                diffs.append({"symbol": "CASH", "recorded": held_cash,
+                              "external": cash,
+                              "cash_delta": cash - held_cash})
+        return diffs
+
+    def apply_adjustment(self, run_date, kind, symbol=None,
+                         qty_delta=0.0, cash_delta=0.0, note=""):
+        """Record a change that happened outside the workflow (manual trade,
+        dividend, split, cash transfer) and apply it atomically. Keeps the
+        audit trail append-only: the state DB remains the single source of
+        truth, adjustments are how outside events enter it."""
+        with self.conn:
+            cur = self.conn.execute(
+                "INSERT INTO adjustments (run_date, kind, symbol,"
+                " qty_delta, cash_delta, note, created_at) VALUES"
+                " (?, ?, ?, ?, ?, ?, ?)",
+                (run_date, kind, symbol, qty_delta, cash_delta, note,
+                 time.time()))
+            if symbol and qty_delta:
+                pos = self.get_positions().get(symbol, 0.0) + qty_delta
+                if abs(pos) < 1e-9:
+                    self.conn.execute(
+                        "DELETE FROM positions WHERE symbol = ?", (symbol,))
+                else:
+                    self.conn.execute(
+                        "INSERT INTO positions (symbol, qty) VALUES (?, ?)"
+                        " ON CONFLICT(symbol) DO UPDATE SET"
+                        " qty = excluded.qty", (symbol, pos))
+            if cash_delta:
+                self.conn.execute(
+                    "UPDATE portfolio SET cash = cash + ? WHERE id = 1",
+                    (cash_delta,))
+        return cur.lastrowid
+
+    def get_adjustments(self):
+        return [dict(r) for r in self.conn.execute(
+            "SELECT * FROM adjustments ORDER BY id").fetchall()]
 
     # ---- checkpoints ----------------------------------------------------
 

@@ -36,11 +36,12 @@ class PipelineError(RuntimeError):
 
 
 class Context:
-    def __init__(self, store, cfg, cache_dir=None, auto_approve=False,
-                 crash_after=None, crash_on=None):
+    def __init__(self, store, cfg, cache_dir=None, inbox_dir=None,
+                 auto_approve=False, crash_after=None, crash_on=None):
         self.store = store
         self.cfg = cfg
         self.cache_dir = cache_dir
+        self.inbox_dir = inbox_dir
         self.auto_approve = auto_approve
         self.crash_after = crash_after    # stage id, e.g. "S2"
         self.crash_on = crash_on          # run_date to crash on (None = first)

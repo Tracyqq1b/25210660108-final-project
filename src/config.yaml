@@ -62,3 +62,7 @@ limits:
     network: "data-feed only (read)"
     trading: "sandbox only"
     filesystem: "project directory only"
+
+# Optional broker positions inbox: drop <YYYY-MM-DD>_positions.csv here and
+# S1 reconciles it against recorded state before the pipeline proceeds.
+positions_inbox: "data/inbox"

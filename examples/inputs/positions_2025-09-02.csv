@@ -1,0 +1,10 @@
+# Example broker positions export for the S1 reconciliation inbox.
+# Format: symbol,qty per line; an optional CASH row carries the cash balance.
+# Drop this at data/inbox/2025-09-02_positions.csv to exercise reconciliation.
+AAPL,20
+MSFT,8
+NVDA,25
+QQQ,7
+IEF,40
+COST,4
+CASH,10000.00

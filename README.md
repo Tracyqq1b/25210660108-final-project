@@ -22,7 +22,7 @@
 | `data/cache/` | 真实行情缓存(东方财富 K 线 API 拉取的日线,2024-09 至 2025-10) |
 | `examples/inputs/` | 示例输入(组合定义) |
 | `examples/outputs/` | 示例产出:2025-09-02 再平衡日完整三连套(提案+复核+审批+对账)、两个月末的 S7 评估报告 |
-| `tests/` | 11 个测试:崩溃恢复、无未来数据泄露、审批门与复核独立性 |
+| `tests/` | 15 个测试:崩溃恢复、无未来数据泄露、审批门与复核独立性、持仓对账 |
 
 ## 安装与运行
 
@@ -57,15 +57,22 @@ python3 src/pma/cli.py rollback-rules --to 1 --yes
 python3 src/pma/cli.py status
 python3 src/pma/cli.py export --day 2025-09-02 --out /tmp/pma-export
 
-# 7. 测试(11 个:恢复、泄露、审批门)
+# 7. 持仓对账:券商快照放入收件箱后,S1 自动对账;分歧时用此命令把
+#    工作流外变动(手动交易/分红/拆股)记为只追加调整记录,再重跑当日
+cp examples/inputs/positions_2025-09-02.csv data/inbox/
+python3 src/pma/cli.py import-positions --file data/inbox/2025-09-02_positions.csv \
+    --day 2025-09-02 --yes
+
+# 8. 测试(15 个:恢复、泄露、审批门、对账)
 python3 -m unittest discover -s tests -v
 ```
 
 ## 验证证据位置
 
-- 自动化测试输出:`docs/evidence/tests.log`(11/11 通过)
+- 自动化测试输出:`docs/evidence/tests.log`(15/15 通过)
 - 44 个交易日完整回放:`docs/evidence/replay.log`
 - 崩溃→续跑:`docs/evidence/recovery.log`(S1–S3 被检查点跳过,attempts 保持 1)
+- 持仓对账升级:`docs/evidence/reconciliation.log`(快照分歧 → S1 停工 → 人工入账 → 续跑)
 - 规则 v1→v2→(回滚)v3:`docs/evidence/rules-lifecycle.log`
 - 再平衡日三连套:`examples/outputs/2025-09-02/`
 

@@ -18,7 +18,8 @@ CANDIDATE_BANDS = [0.03, 0.05, 0.08]
 
 def reconstruct_start_state(ctx, window_days):
     """Exact portfolio state at the start of the window, reconstructed by
-    reversing the recorded fills inside the window."""
+    reversing the recorded fills and outside-workflow adjustments inside
+    the window."""
     positions = ctx.store.get_positions()
     cash = ctx.store.get_cash()
     days = set(window_days)
@@ -31,6 +32,13 @@ def reconstruct_start_state(ctx, window_days):
         else:
             positions[t["symbol"]] = positions.get(t["symbol"], 0.0) + t["qty"]
             cash -= t["notional"]
+    for a in ctx.store.get_adjustments():
+        if a["run_date"] not in days:
+            continue
+        if a.get("symbol"):
+            positions[a["symbol"]] = (
+                positions.get(a["symbol"], 0.0) - a["qty_delta"])
+        cash -= a["cash_delta"]
     return {k: v for k, v in positions.items() if abs(v) > 1e-9}, cash
 
 

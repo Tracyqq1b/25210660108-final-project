@@ -9,7 +9,16 @@ Each stage returns its artifact dict; the controller persists it through
 StateStore.save_artifact and records the checkpoint.
 """
 
+import csv
+import os
+
 from . import datafeed
+
+
+class PositionsDivergedError(RuntimeError):
+    """Raised when an external positions snapshot disagrees with recorded
+    state. The pipeline stops and escalates; a human resolves it with
+    `import-positions`, then the day resumes from S1."""
 
 
 def _prices(ctx, day):
@@ -31,17 +40,36 @@ def _valuation(ctx, day, prices=None):
 
 # ---------------------------------------------------------------- S1 ----
 
+def load_positions_snapshot(path):
+    """Parse a broker positions export: CSV rows of ``symbol,qty`` plus an
+    optional ``CASH,<amount>`` row. Returns (positions, cash_or_None)."""
+    positions = {}
+    cash = None
+    with open(path, newline="") as fh:
+        for row in csv.reader(fh):
+            if not row or row[0].strip().startswith("#"):
+                continue
+            symbol, qty = row[0].strip().upper(), float(row[1])
+            if symbol == "CASH":
+                cash = qty
+            else:
+                positions[symbol] = qty
+    return positions, cash
+
+
 def s1_ingest(ctx, day):
-    """S1 data ingestion: standardized end-of-day market snapshot.
+    """S1 data ingestion: standardized end-of-day market snapshot, plus
+    positions reconciliation when a broker snapshot is in the inbox.
 
     Reads only rows dated <= ``day`` from the cached feed (the feed itself
     enforces the cutoff), so the snapshot contains exactly what was knowable
-    at the close of ``day``.
-    """
+    at the close of ``day``. If ``<inbox>/<day>_positions.csv`` exists, the
+    recorded positions must match it; a mismatch stops the pipeline and
+    escalates (resolve with `import-positions`, then resume)."""
     prices = _prices(ctx, day)
     ranges = {s: datafeed.cache_range(s, ctx.cache_dir)
               for s in ctx.cfg["portfolio"]["universe"]}
-    return {
+    artifact = {
         "stage": "S1",
         "run_date": day,
         "source": "eastmoney-kline-cache",
@@ -49,6 +77,24 @@ def s1_ingest(ctx, day):
         "prices": prices,
         "cache_coverage": ranges,
     }
+
+    inbox = getattr(ctx, "inbox_dir", None)
+    if inbox:
+        snapshot_path = os.path.join(inbox, "%s_positions.csv" % day)
+        if os.path.exists(snapshot_path):
+            snapshot, cash = load_positions_snapshot(snapshot_path)
+            diffs = ctx.store.diff_positions(snapshot, cash)
+            artifact["positions_reconciliation"] = {
+                "snapshot": snapshot_path,
+                "status": "ok" if not diffs else "diverged",
+                "diffs": diffs,
+            }
+            if diffs:
+                raise PositionsDivergedError(
+                    "positions snapshot %s diverges from recorded state: %s"
+                    " -- resolve with `import-positions` and resume"
+                    % (snapshot_path, diffs))
+    return artifact
 
 
 # ---------------------------------------------------------------- S2 ----
