@@ -258,13 +258,24 @@ def s3_signal(ctx, day):
 
 # ---------------------------------------------------------------- S5 ----
 
-def s5_approval(ctx, day, auto=False, note=""):
-    """S5 human approval gate.
+class AwaitingApproval(Exception):
+    """Raised by S5 when a consequential proposal has no human decision
+    yet. The controller marks the stage 'waiting' and pauses the day
+    cleanly; the run resumes once the operator records a decision with
+    the `approve` command."""
 
-    Interactive by default: shows the reviewed proposal and waits for the
-    user to type approve/reject. ``auto=True`` exists for tests and the
-    scripted demo replay, and is always recorded as such in the audit note.
+
+def s5_approval(ctx, day, auto=False, note=""):
+    """S5 human approval gate, asynchronous.
+
+    HOLD proposals are acknowledged automatically. Actionable proposals
+    require a recorded human decision: on first arrival the stage writes
+    an approval-request document, pushes a notification through the
+    configured channels, and pauses. The `approve` command records the
+    decision; on resume this stage finds the record and completes.
     """
+    from . import notify, render
+
     proposal = ctx.store.stage_artifact(day, "S3")
     review = ctx.store.stage_artifact(day, "S4")
     if proposal is None or review is None:
@@ -274,22 +285,38 @@ def s5_approval(ctx, day, auto=False, note=""):
                            % review["status"])
     proposal_hash = ctx.store.save_artifact(day, "S3", proposal)
 
-    if auto:
-        decision = "approved"
-        note = (note + " " if note else "") + "AUTO-APPROVED (demo/test mode)"
-    elif proposal["action"] == "HOLD":
+    if proposal["action"] == "HOLD" and not proposal["trades"]:
+        ctx.store.record_approval(day, proposal_hash, "approved",
+                                  "no action required (HOLD proposal)")
         decision = "approved"
         note = "no action required (HOLD proposal)"
+    elif auto:
+        ctx.store.record_approval(day, proposal_hash, "approved",
+                                  (note + " " if note else "")
+                                  + "AUTO-APPROVED (demo/test mode)")
+        decision = "approved"
+        note = "AUTO-APPROVED (demo/test mode)"
     else:
-        print("=== Rebalance proposal %s ===" % day)
-        print(proposal["rationale"])
-        for t in proposal["trades"]:
-            print("  %(side)s %(qty)s x %(symbol)s @ ~%(est_price)s"
-                  " (%(reason)s)" % t)
-        answer = input("Approve? [y/N] ").strip().lower()
-        decision = "approved" if answer == "y" else "rejected"
+        existing = ctx.store.find_approval_any(day, proposal_hash)
+        if existing is None:
+            doc = render.render_approval_request(ctx.store, day)
+            if getattr(ctx, "approvals_dir", None):
+                import os
+                os.makedirs(ctx.approvals_dir, exist_ok=True)
+                with open(os.path.join(ctx.approvals_dir,
+                                       "%s.md" % day), "w") as fh:
+                    fh.write(doc)
+            notify.send(
+                ctx.cfg,
+                "[PMA] %s 再平衡提案待审批" % day,
+                "%s；%d 笔交易待批准。批复:python3 src/pma/cli.py approve "
+                "--day %s" % (proposal["action"], len(proposal["trades"]),
+                              day))
+            raise AwaitingApproval(day)
+        decision = existing["decision"]
+        note = note or "operator decision via approve command"
 
-    approval_id = ctx.store.record_approval(day, proposal_hash, decision, note)
+    approval_id = ctx.store.find_approval_any(day, proposal_hash)["id"]
     return {
         "stage": "S5",
         "run_date": day,

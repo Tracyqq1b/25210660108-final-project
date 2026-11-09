@@ -132,6 +132,62 @@ def render_day(store, day):
     return "\n".join(lines)
 
 
+def render_approval_request(store, day):
+    """Render the approval-request document for a pending proposal. This is
+    what the operator reads before running `approve`/`approve --reject`."""
+    s3 = store.stage_artifact(day, "S3")
+    s4 = store.stage_artifact(day, "S4")
+    s2 = store.stage_artifact(day, "S2")
+    lines = ["# 审批单 %s" % day, ""]
+    lines.append("**动作**:%s(规则版本 v%s)" % (s3["action"],
+                                               s3["rule_version"]))
+    lines.append("")
+    lines.append("**理由**:%s" % s3["rationale"])
+    lines.append("")
+    if s2 and s2["breaches"]:
+        lines.append("## 触发越界")
+        lines.append("")
+        lines.append("| 规则 | 对象 | 当前值 | 阈值 |")
+        lines.append("| --- | --- | --- | --- |")
+        for b in s2["breaches"]:
+            target = b.get("symbol") or b.get("sector") or "组合"
+            lines.append("| %s | %s | %s | %s |" % (
+                b["rule"], target, b.get("value"), b.get("limit")))
+        lines.append("")
+    lines.append("## 拟执行交易(T+1 成交)")
+    lines.append("")
+    lines.append("| 方向 | 数量 | 标的 | 参考价 | 估计金额 | 理由 |")
+    lines.append("| --- | --- | --- | --- | --- | --- |")
+    for t in s3["trades"]:
+        lines.append("| %s | %d | %s | %.2f | %s | %s |" % (
+            t["side"], t["qty"], t["symbol"], t["est_price"],
+            _fmt_money(t["est_notional"]), t["reason"]))
+    lines.append("")
+    if s4:
+        passed = sum(1 for c in s4["checks"] if c["pass"])
+        lines.append("## 独立复核(S4)")
+        lines.append("")
+        lines.append("结论:**%s**(%d/%d 项检查通过)" % (
+            s4["status"], passed, len(s4["checks"])))
+        for c in s4["checks"]:
+            if not c["pass"]:
+                lines.append("- 未通过:%s — %s" % (c["check"],
+                                                   c["detail"]))
+        lines.append("")
+    lines.append("## 如何批复")
+    lines.append("")
+    lines.append("```sh")
+    lines.append("python3 src/pma/cli.py approve --day %s          # 批准"
+                 % day)
+    lines.append("python3 src/pma/cli.py approve --day %s --reject # 驳回"
+                 % day)
+    lines.append("```")
+    lines.append("")
+    lines.append("批准后流程自动续跑:订单挂为待执行,次一交易日成交并对账。")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def render_month(store, month):
     """Render the S7 monthly rules-evaluation report. Returns None if S7
     has not run for that month."""

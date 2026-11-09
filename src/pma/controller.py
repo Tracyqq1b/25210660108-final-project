@@ -37,11 +37,13 @@ class PipelineError(RuntimeError):
 
 class Context:
     def __init__(self, store, cfg, cache_dir=None, inbox_dir=None,
-                 auto_approve=False, crash_after=None, crash_on=None):
+                 approvals_dir=None, auto_approve=False,
+                 crash_after=None, crash_on=None):
         self.store = store
         self.cfg = cfg
         self.cache_dir = cache_dir
         self.inbox_dir = inbox_dir
+        self.approvals_dir = approvals_dir
         self.auto_approve = auto_approve
         self.crash_after = crash_after    # stage id, e.g. "S2"
         self.crash_on = crash_on          # run_date to crash on (None = first)
@@ -51,9 +53,12 @@ def run_day(ctx, day):
     """Run S1..S6 for one trading day, resuming from checkpoints.
 
     Returns a dict of stage -> artifact hash for the stages that are done.
+    A stage waiting on a human decision pauses the day cleanly (status
+    'waiting'); re-running the day resumes it once the decision exists.
     """
     results = {}
     crashed = False
+    paused = False
     for stage in STAGES:
         status = ctx.store.stage_status(day, stage)
         if status == "done":
@@ -61,7 +66,13 @@ def run_day(ctx, day):
             art = ctx.store.stage_artifact(day, stage)
             results[stage] = art
             continue
-        results[stage] = _run_with_retries(ctx, day, stage)
+        try:
+            results[stage] = _run_with_retries(ctx, day, stage)
+        except stages.AwaitingApproval:
+            ctx.store.set_stage_waiting(day, stage)
+            log.info("%s %s: waiting for human approval", day, stage)
+            paused = True
+            break
         if ctx.crash_after == stage and (
                 ctx.crash_on is None or ctx.crash_on == day):
             crashed = True
@@ -72,7 +83,7 @@ def run_day(ctx, day):
     if crashed:
         raise SimulatedCrash("crash injected after %s on %s"
                              % (crash_stage, day))
-    return results
+    return results, paused
 
 
 def _run_with_retries(ctx, day, stage):
@@ -89,6 +100,8 @@ def _run_with_retries(ctx, day, stage):
             ctx.store.complete_stage(day, stage, digest)
             log.info("%s %s: done (artifact %s)", day, stage, digest)
             return artifact
+        except stages.AwaitingApproval:
+            raise  # human gate, not a failure: do not retry
         except Exception as exc:  # noqa: BLE001 - controller boundary
             ctx.store.fail_stage(day, stage)
             log.warning("%s %s: attempt %d failed: %s",

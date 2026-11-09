@@ -20,6 +20,7 @@ class WorkflowTestCase(unittest.TestCase):
     def setUp(self):
         with open(CONFIG) as fh:
             self.cfg = yaml.safe_load(fh)
+        self.cfg["notifications"] = {"enabled": False}  # never fire in tests
         self.tmp = tempfile.TemporaryDirectory()
         self.db_path = os.path.join(self.tmp.name, "state.db")
         self.store = StateStore(self.db_path)
@@ -33,4 +34,6 @@ class WorkflowTestCase(unittest.TestCase):
 
     def ctx(self, **kw):
         kw.setdefault("auto_approve", True)
+        kw.setdefault("approvals_dir",
+                      os.path.join(self.tmp.name, "approvals"))
         return controller.Context(self.store, self.cfg, **kw)

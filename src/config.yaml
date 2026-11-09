@@ -66,3 +66,16 @@ limits:
 # Optional broker positions inbox: drop <YYYY-MM-DD>_positions.csv here and
 # S1 reconciles it against recorded state before the pipeline proceeds.
 positions_inbox: "data/inbox"
+
+# Approval-request notifications. All channels are opt-in; the approval
+# document is always written to runs/approvals/ regardless.
+notifications:
+  enabled: true
+  desktop: true            # macOS notification center
+  webhook_url: ""          # POST {"text": ...} to any webhook endpoint
+  email:                   # stdlib smtplib; password comes ONLY from the
+    host: ""               # PMA_SMTP_PASSWORD environment variable
+    port: 465
+    username: ""
+    from: ""
+    to: ""

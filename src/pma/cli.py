@@ -43,6 +43,8 @@ def build_ctx(args):
         inbox = os.path.join(ROOT, inbox)
     return controller.Context(
         store, cfg, cache_dir=args.cache, inbox_dir=inbox,
+        approvals_dir=os.path.join(
+            os.path.dirname(os.path.abspath(args.db)), "approvals"),
         auto_approve=getattr(args, "auto_approve", False),
         crash_after=getattr(args, "crash_after", None),
         crash_on=getattr(args, "crash_on", None))
@@ -95,8 +97,35 @@ def cmd_import_positions(args):
 
 def cmd_run_day(args):
     ctx = build_ctx(args)
-    controller.run_day(ctx, args.date)
-    print("run-day %s complete" % args.date)
+    _, paused = controller.run_day(ctx, args.date)
+    if paused:
+        print("run-day %s PAUSED: proposal awaiting approval" % args.date)
+        print("review runs/approvals/%s.md, then:" % args.date)
+        print("  python3 src/pma/cli.py approve --day %s [--reject]"
+              % args.date)
+    else:
+        print("run-day %s complete" % args.date)
+
+
+def cmd_approve(args):
+    ctx = build_ctx(args)
+    proposal = ctx.store.stage_artifact(args.day, "S3")
+    if proposal is None:
+        print("no proposal for %s" % args.day)
+        return
+    proposal_hash = ctx.store.save_artifact(args.day, "S3", proposal)
+    if ctx.store.find_approval_any(args.day, proposal_hash):
+        print("%s already has a recorded decision" % args.day)
+        return
+    decision = "rejected" if args.reject else "approved"
+    ctx.store.record_approval(
+        args.day, proposal_hash, decision,
+        args.note or "operator decision via approve command")
+    print("%s: %s" % (args.day, decision))
+    if decision == "approved":
+        _, paused = controller.run_day(ctx, args.day)
+        print("run-day %s %s" % (args.day,
+                                 "complete" if not paused else "paused"))
 
 
 def _reports_dir(args):
@@ -112,12 +141,19 @@ def cmd_replay(args):
     print("replaying %d trading days %s..%s" % (len(days), days[0], days[-1]))
     for day in days:
         try:
-            controller.run_day(ctx, day)
+            _, paused = controller.run_day(ctx, day)
         except controller.SimulatedCrash as exc:
             print("INTERRUPTED: %s" % exc)
             print("resume with: python3 src/pma/cli.py replay --from %s "
                   "--to %s --db %s" % (day, args.end, args.db))
             sys.exit(75)
+        if paused:
+            print("PAUSED at %s: proposal awaiting approval." % day)
+            print("review runs/approvals/%s.md, then:" % day)
+            print("  python3 src/pma/cli.py approve --day %s [--reject]"
+                  % day)
+            print("then re-run the same replay command to continue.")
+            sys.exit(0)
         report = render.render_day(ctx.store, day)
         if report:
             with open(os.path.join(_reports_dir(args), "%s.md" % day),
@@ -299,6 +335,11 @@ def main(argv=None):
     p.add_argument("--to", type=int, required=True)
     p.add_argument("--reason", default="")
     p.add_argument("--yes", action="store_true")
+
+    p = sub.add_parser("approve")
+    p.add_argument("--day", required=True)
+    p.add_argument("--reject", action="store_true")
+    p.add_argument("--note", default="")
 
     p = sub.add_parser("report")
     p.add_argument("--day")

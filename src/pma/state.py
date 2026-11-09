@@ -303,6 +303,16 @@ class StateStore:
                 " WHERE run_date = ? AND stage = ?",
                 (time.time(), run_date, stage))
 
+    def set_stage_waiting(self, run_date, stage):
+        """Mark a stage as waiting on a human decision. Distinct from
+        'failed': a waiting stage is healthy and simply resumes when the
+        decision arrives."""
+        with self.conn:
+            self.conn.execute(
+                "UPDATE stage_runs SET status = 'waiting', updated_at = ?"
+                " WHERE run_date = ? AND stage = ?",
+                (time.time(), run_date, stage))
+
     def attempts(self, run_date, stage):
         row = self.conn.execute(
             "SELECT attempts FROM stage_runs WHERE run_date = ? AND stage = ?",
@@ -351,6 +361,14 @@ class StateStore:
             " AND decision = ? ORDER BY id DESC LIMIT 1",
             (run_date, proposal_hash, decision)).fetchone()
         return row["id"] if row else None
+
+    def find_approval_any(self, run_date, proposal_hash):
+        """Latest approval record for a proposal, any decision."""
+        row = self.conn.execute(
+            "SELECT id, decision FROM approvals WHERE run_date = ?"
+            " AND proposal_hash = ? ORDER BY id DESC LIMIT 1",
+            (run_date, proposal_hash)).fetchone()
+        return dict(row) if row else None
 
     # ---- rule versions ----------------------------------------------------
 
