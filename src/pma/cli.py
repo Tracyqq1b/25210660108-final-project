@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import yaml  # noqa: E402
 
-from pma import controller, datafeed, rules_eval, stages  # noqa: E402
+from pma import controller, datafeed, render, rules_eval, stages  # noqa: E402
 from pma.state import StateStore  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
@@ -99,6 +99,13 @@ def cmd_run_day(args):
     print("run-day %s complete" % args.date)
 
 
+def _reports_dir(args):
+    path = os.path.join(os.path.dirname(os.path.abspath(args.db)),
+                        "reports")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
 def cmd_replay(args):
     ctx = build_ctx(args)
     days = datafeed.trading_days(args.start, args.end, args.cache)
@@ -111,8 +118,13 @@ def cmd_replay(args):
             print("resume with: python3 src/pma/cli.py replay --from %s "
                   "--to %s --db %s" % (day, args.end, args.db))
             sys.exit(75)
+        report = render.render_day(ctx.store, day)
+        if report:
+            with open(os.path.join(_reports_dir(args), "%s.md" % day),
+                      "w") as fh:
+                fh.write(report)
         _maybe_rules_eval(ctx, args, day, days)
-    print("replay complete")
+    print("replay complete; daily reports in %s" % _reports_dir(args))
 
 
 def _maybe_rules_eval(ctx, args, day, days):
@@ -125,9 +137,35 @@ def _maybe_rules_eval(ctx, args, day, days):
         digest = ctx.store.save_artifact(day, "S7", artifact)
         ctx.store.begin_stage(day, "S7")
         ctx.store.complete_stage(day, "S7", digest)
+        report = render.render_month(ctx.store, day[0:7])
+        if report:
+            with open(os.path.join(_reports_dir(args),
+                                   "%s_rules.md" % day[0:7]), "w") as fh:
+                fh.write(report)
         verdict = ("proposal: %s" % artifact["proposal"]["reason"]
                    if artifact["proposal"] else "no change proposed")
         print("S7 rules evaluation %s: %s" % (day[0:7], verdict))
+
+
+def cmd_report(args):
+    ctx = build_ctx(args)
+    if args.month:
+        text = render.render_month(ctx.store, args.month)
+        default = "%s_rules.md" % args.month
+    else:
+        text = render.render_day(ctx.store, args.day)
+        default = "%s.md" % args.day
+    if text is None:
+        print("nothing to render (day not run / S7 missing)")
+        return
+    if args.out:
+        os.makedirs(args.out, exist_ok=True)
+        path = os.path.join(args.out, default)
+        with open(path, "w") as fh:
+            fh.write(text)
+        print("written %s" % path)
+    else:
+        print(text)
 
 
 def cmd_rules_eval(args):
@@ -261,6 +299,11 @@ def main(argv=None):
     p.add_argument("--to", type=int, required=True)
     p.add_argument("--reason", default="")
     p.add_argument("--yes", action="store_true")
+
+    p = sub.add_parser("report")
+    p.add_argument("--day")
+    p.add_argument("--month")
+    p.add_argument("--out")
 
     sub.add_parser("status")
 

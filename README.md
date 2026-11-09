@@ -18,11 +18,11 @@
 | `docs/evidence/` | 验证与恢复证据:测试输出、完整回放日志、崩溃恢复日志、规则版本生命周期日志 |
 | `prompts/` | 三个 Agent 的角色提示词(S3 信号、S4 复核、S7 规则评估) |
 | `src/config.yaml` | 组合、规则阈值、执行参数、运行限额与权限声明 |
-| `src/pma/` | 工作流实现:`datafeed.py`(数据层,as-of 截止)、`state.py`(SQLite 状态/检查点/规则版本)、`stages.py`(S1–S6)、`review.py`(S4 独立复核)、`controller.py`(编排/重试/续跑/审批门)、`rules_eval.py`(S7)、`cli.py`(命令行) |
+| `src/pma/` | 工作流实现:`datafeed.py`(数据层,as-of 截止)、`state.py`(SQLite 状态/检查点/规则版本)、`stages.py`(S1–S6)、`review.py`(S4 独立复核)、`controller.py`(编排/重试/续跑/审批门)、`rules_eval.py`(S7)、`render.py`(日终/月度报告渲染)、`cli.py`(命令行) |
 | `data/cache/` | 真实行情缓存(东方财富 K 线 API 拉取的日线,2024-09 至 2025-10) |
 | `examples/inputs/` | 示例输入(组合定义) |
-| `examples/outputs/` | 示例产出:2025-09-02 再平衡日完整三连套(提案+复核+审批+对账)、两个月末的 S7 评估报告 |
-| `tests/` | 15 个测试:崩溃恢复、无未来数据泄露、审批门与复核独立性、持仓对账 |
+| `examples/outputs/` | 示例产出:2025-09-02 再平衡日完整三连套(提案+复核+审批+对账)、两个月末的 S7 评估报告、`reports/` 下渲染好的日终与月度 Markdown 报告 |
+| `tests/` | 19 个测试:崩溃恢复、无未来数据泄露、审批门与复核独立性、持仓对账、报告渲染 |
 
 ## 安装与运行
 
@@ -53,9 +53,11 @@ python3 src/pma/cli.py replay --from 2025-09-02 --to 2025-09-12 --auto-approve -
 python3 src/pma/cli.py apply-rules --yes
 python3 src/pma/cli.py rollback-rules --to 1 --yes
 
-# 6. 查看状态 / 导出某日的全部产出
+# 6. 查看状态 / 导出某日的全部产出 / 渲染报告
 python3 src/pma/cli.py status
 python3 src/pma/cli.py export --day 2025-09-02 --out /tmp/pma-export
+python3 src/pma/cli.py report --day 2025-09-02        # 日终报告(回放时已自动写入 runs/reports/)
+python3 src/pma/cli.py report --month 2025-10        # 月度规则评估报告
 
 # 7. 持仓对账:券商快照放入收件箱后,S1 自动对账;分歧时用此命令把
 #    工作流外变动(手动交易/分红/拆股)记为只追加调整记录,再重跑当日
@@ -63,18 +65,19 @@ cp examples/inputs/positions_2025-09-02.csv data/inbox/
 python3 src/pma/cli.py import-positions --file data/inbox/2025-09-02_positions.csv \
     --day 2025-09-02 --yes
 
-# 8. 测试(15 个:恢复、泄露、审批门、对账)
+# 8. 测试(19 个:恢复、泄露、审批门、对账、报告渲染)
 python3 -m unittest discover -s tests -v
 ```
 
 ## 验证证据位置
 
-- 自动化测试输出:`docs/evidence/tests.log`(15/15 通过)
+- 自动化测试输出:`docs/evidence/tests.log`(19/19 通过)
 - 44 个交易日完整回放:`docs/evidence/replay.log`
 - 崩溃→续跑:`docs/evidence/recovery.log`(S1–S3 被检查点跳过,attempts 保持 1)
 - 持仓对账升级:`docs/evidence/reconciliation.log`(快照分歧 → S1 停工 → 人工入账 → 续跑)
 - 规则 v1→v2→(回滚)v3:`docs/evidence/rules-lifecycle.log`
 - 再平衡日三连套:`examples/outputs/2025-09-02/`
+- 渲染好的日终/月度报告样例:`examples/outputs/reports/`
 
 ## 个人贡献说明
 
