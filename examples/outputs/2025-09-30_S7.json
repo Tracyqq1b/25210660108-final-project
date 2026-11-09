@@ -5,28 +5,32 @@
       "end_value": 35380.91,
       "max_drawdown": -0.0094,
       "rebalance_days": 0,
-      "turnover": 0.0
+      "turnover": 0.0,
+      "unfilled_orders_at_window_end": 0
     },
     "candidate_drift_band_0.03": {
       "breach_days": 1,
-      "end_value": 35685.26,
+      "end_value": 35633.38,
       "max_drawdown": -0.0118,
       "rebalance_days": 1,
-      "turnover": 7897.84
+      "turnover": 7949.71,
+      "unfilled_orders_at_window_end": 0
     },
     "candidate_drift_band_0.08": {
       "breach_days": 1,
-      "end_value": 35660.58,
+      "end_value": 35625.18,
       "max_drawdown": -0.0108,
       "rebalance_days": 1,
-      "turnover": 4500.83
+      "turnover": 4536.23,
+      "unfilled_orders_at_window_end": 0
     },
     "current_rules_v1": {
       "breach_days": 1,
-      "end_value": 35660.58,
+      "end_value": 35625.18,
       "max_drawdown": -0.0108,
       "rebalance_days": 1,
-      "turnover": 4500.83
+      "turnover": 4536.23,
+      "unfilled_orders_at_window_end": 0
     }
   },
   "month": "2025-09",

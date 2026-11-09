@@ -75,7 +75,7 @@ def render_day(store, day):
     if s3 is None:
         lines.append("信号阶段未运行。")
     elif s3["action"] == "HOLD":
-        lines.append("**HOLD** — 无需行动。")
+        lines.append("**HOLD** — %s" % s3["rationale"])
     else:
         lines.append("**%s** — %s" % (s3["action"], s3["rationale"]))
         if s3["trades"]:
@@ -95,20 +95,28 @@ def render_day(store, day):
             lines.append("- 人工审批(S5):**%s**%s" % (
                 s5["decision"],
                 " — " + s5["note"] if s5.get("note") else ""))
-        if s6:
-            if s6.get("fills"):
-                lines.append("- 执行对账(S6):%d 笔成交,执行后现金 %s" % (
-                    len(s6["fills"]),
-                    _fmt_money(s6["reconciliation"]["cash_after"])))
-                lines.append("")
-                lines.append("| 成交 | 数量 | 标的 | 成交价 | 金额 |")
-                lines.append("| --- | --- | --- | --- | --- |")
-                for f in s6["fills"]:
-                    lines.append("| %s | %d | %s | %.4f | %s |" % (
-                        f["side"], f["qty"], f["symbol"], f["price"],
-                        _fmt_money(f["notional"])))
-            else:
-                lines.append("- 执行对账(S6):%s" % s6.get("status"))
+    if s6:
+        if s6.get("fills"):
+            lines.append("- 执行对账(S6):%d 笔成交(T+1 执行),执行后现金 %s"
+                         % (len(s6["fills"]),
+                            _fmt_money(s6["reconciliation"]
+                                       ["cash_after"])))
+            lines.append("")
+            lines.append("| 成交 | 数量 | 标的 | 批准日参考价 | 成交价 | 价差 | 金额 |")
+            lines.append("| --- | --- | --- | --- | --- | --- | --- |")
+            for f in s6["fills"]:
+                lines.append("| %s | %d | %s | %.2f | %.4f | %+.4f | %s |"
+                             % (f["side"], f["qty"], f["symbol"],
+                                f["est_price"], f["price"],
+                                f["price_deviation"],
+                                _fmt_money(f["notional"])))
+        else:
+            lines.append("- 执行对账(S6):今日无成交")
+        if s6.get("new_pending_orders"):
+            lines.append("- 新挂待执行订单 %d 笔(次日成交):%s" % (
+                len(s6["new_pending_orders"]),
+                "; ".join("%s %d×%s" % (o["side"], o["qty"], o["symbol"])
+                          for o in s6["new_pending_orders"])))
     lines.append("")
 
     lines.append("## 审计链(artifact 哈希)")

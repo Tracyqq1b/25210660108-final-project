@@ -10,6 +10,7 @@ StateStore.save_artifact and records the checkpoint.
 """
 
 import csv
+import math
 import os
 
 from . import datafeed
@@ -166,9 +167,16 @@ def s3_signal(ctx, day):
     if risk is None:
         raise RuntimeError("S3 requires the S2 artifact for %s" % day)
     val = _valuation(ctx, day)
-    risk_hash = None
+
+    # Orders approved earlier fill on the next trading day; a breach on a
+    # symbol with an in-flight order is already being addressed, so no
+    # second order is placed for it.
+    in_flight = {}
+    for o in ctx.store.get_pending_orders():
+        in_flight[o["symbol"]] = o
 
     trades = []
+    deferred = []
     if risk["breach"]:
         total = val["total"]
         targets = rules.get("targets", {})
@@ -176,14 +184,33 @@ def s3_signal(ctx, day):
             w = val["weights"][sym]
             t = targets.get(sym)
             desired_w = None
+            trim_to_cap = False
             if w > rules["max_weight"]:
                 desired_w = rules["max_weight"]
+                trim_to_cap = True
             elif t is not None and abs(w - t) > rules["drift_band"]:
                 desired_w = t
             if desired_w is None:
                 continue
+            if sym in in_flight:
+                deferred.append({
+                    "symbol": sym,
+                    "order_id": in_flight[sym]["id"],
+                    "reason": "breach already addressed by pending order "
+                              "#%d (%s %d, approved %s)" % (
+                                  in_flight[sym]["id"],
+                                  in_flight[sym]["side"],
+                                  int(in_flight[sym]["qty"]),
+                                  in_flight[sym]["created_date"]),
+                })
+                continue
             diff_value = (desired_w - w) * total
-            qty = int(abs(diff_value) / val["prices"][sym])
+            # sells round up so a cap trim actually lands under the cap;
+            # buys round down so they never exceed the intended notional
+            if diff_value < 0:
+                qty = math.ceil(abs(diff_value) / val["prices"][sym])
+            else:
+                qty = int(abs(diff_value) / val["prices"][sym])
             if qty < 1:
                 continue
             trades.append({
@@ -206,6 +233,11 @@ def s3_signal(ctx, day):
         rationale = ("Breached rules at close of %s: %s. Proposal trades "
                      "the offending names back inside their bands "
                      "(sells first, self-funding)." % (day, ", ".join(cited)))
+    elif deferred:
+        action = "HOLD"
+        rationale = ("Breaches detected at close of %s, but every affected "
+                     "name already has an in-flight order filling next "
+                     "trading day; no new orders." % day)
     else:
         action = "ALERT_ONLY"
         rationale = ("Breaches detected at close of %s but all implied "
@@ -217,6 +249,7 @@ def s3_signal(ctx, day):
         "rule_version": risk["rule_version"],
         "action": action,
         "trades": trades,
+        "deferred": deferred,
         "rationale": rationale,
         "based_on": {"S2_total_value": risk["total_value"],
                      "S2_breaches": risk["breaches"]},
@@ -270,73 +303,113 @@ def s5_approval(ctx, day, auto=False, note=""):
 # ---------------------------------------------------------------- S6 ----
 
 def s6_execute(ctx, day):
-    """S6 sandbox execution + reconciliation.
+    """S6 sandbox execution + reconciliation, on a T+1 model.
 
-    Hard gate: no fill happens without an 'approved' S5 record whose
-    proposal hash matches the current S3 artifact. Fills use the close
-    price with configured slippage; each fill is applied atomically.
+    Phase 1: fill orders that were approved on earlier days, at *today's*
+    price -- a decision made with T-day close data can never fill at the
+    T-day close, so approval creates a pending order and the next trading
+    day's S6 fills it. Phase 2: today's approved proposal becomes pending
+    orders for the next trading day.
+
+    Hard gate: pending orders are created only when an 'approved' S5 record
+    matches the current proposal hash. Quantities always match the approved
+    proposal; the fill-price difference vs the T-day estimate is disclosed
+    in the reconciliation.
     """
+    slip = ctx.cfg["execution"]["slippage_bps"] / 1e4
+    max_notional = ctx.cfg["execution"]["max_order_notional"]
+
+    # ---- phase 1: fill pending orders from earlier approvals
+    fills = []
+    pending = ctx.store.get_pending_orders()
+    pending.sort(key=lambda o: 0 if o["side"] == "SELL" else 1)
+    for order in pending:
+        price = datafeed.price_on(order["symbol"], day, ctx.cache_dir)
+        price *= (1 - slip) if order["side"] == "SELL" else (1 + slip)
+        price = round(price, 4)
+        notional = order["qty"] * price
+        if notional > max_notional:
+            raise RuntimeError("pending order #%s notional %.2f exceeds cap"
+                               % (order["id"], notional))
+        if order["side"] == "SELL":
+            if ctx.store.get_positions().get(order["symbol"], 0.0) \
+                    < order["qty"]:
+                raise RuntimeError(
+                    "cannot fill pending SELL %s x%s: insufficient holding"
+                    " (escalate: resolve externally and reconcile)"
+                    % (order["symbol"], order["qty"]))
+        elif notional > ctx.store.get_cash():
+            raise RuntimeError(
+                "cannot fill pending BUY %s x%s: insufficient cash"
+                " (escalate: resolve externally and reconcile)"
+                % (order["symbol"], order["qty"]))
+        trade_id = ctx.store.fill_pending_order(order["id"], day, price)
+        fills.append({"trade_id": trade_id, "order_id": order["id"],
+                      "symbol": order["symbol"], "side": order["side"],
+                      "qty": order["qty"], "price": price,
+                      "notional": round(notional, 2),
+                      "est_price": order["est_price"],
+                      "approved_on": order["created_date"],
+                      "price_deviation": round(price - order["est_price"],
+                                               4)})
+
+    # ---- phase 2: today's approved proposal -> pending orders
+    new_orders = []
     proposal = ctx.store.stage_artifact(day, "S3")
     approval = ctx.store.stage_artifact(day, "S5")
-    if proposal is None or approval is None:
-        raise RuntimeError("S6 requires S3 and S5 artifacts for %s" % day)
-    if approval["decision"] != "approved":
-        return {"stage": "S6", "run_date": day, "status": "skipped",
-                "reason": "proposal not approved", "fills": []}
-
-    proposal_hash = ctx.store.save_artifact(day, "S3", proposal)
-    if approval["proposal_hash"] != proposal_hash:
-        raise RuntimeError("approval does not match current proposal")
-    approval_id = ctx.store.find_approval(day, proposal_hash)
-    if approval_id is None:
-        raise RuntimeError("no approved record found for proposal")
-
-    max_notional = ctx.cfg["execution"]["max_order_notional"]
-    slip = ctx.cfg["execution"]["slippage_bps"] / 1e4
-    cash = ctx.store.get_cash()
-    positions = ctx.store.get_positions()
-
-    # Pre-flight affordability / inventory check before any fill.
-    projected_cash = cash
-    projected_pos = dict(positions)
-    for t in proposal["trades"]:
-        notional = t["qty"] * t["est_price"]
-        if notional > max_notional:
-            raise RuntimeError("order notional %.2f exceeds cap %.2f"
-                               % (notional, max_notional))
-        if t["side"] == "SELL":
-            if projected_pos.get(t["symbol"], 0.0) < t["qty"]:
-                raise RuntimeError("cannot sell %s x%s: not held"
-                                   % (t["symbol"], t["qty"]))
-            projected_pos[t["symbol"]] -= t["qty"]
-            projected_cash += notional
+    if proposal and proposal["trades"]:
+        if approval is None:
+            raise RuntimeError("proposal with trades has no S5 approval")
+        if approval["decision"] != "approved":
+            pass  # rejected: nothing to place
         else:
-            projected_cash -= notional
-            projected_pos[t["symbol"]] = (
-                projected_pos.get(t["symbol"], 0.0) + t["qty"])
-    if projected_cash < -1e-9:
-        raise RuntimeError("insufficient cash for proposed buys")
+            proposal_hash = ctx.store.save_artifact(day, "S3", proposal)
+            if approval["proposal_hash"] != proposal_hash:
+                raise RuntimeError(
+                    "approval does not match current proposal")
+            approval_id = ctx.store.find_approval(day, proposal_hash)
+            if approval_id is None:
+                raise RuntimeError("no approved record found for proposal")
 
-    fills = []
-    for t in proposal["trades"]:
-        price = datafeed.price_on(t["symbol"], day, ctx.cache_dir)
-        price *= (1 - slip) if t["side"] == "SELL" else (1 + slip)
-        price = round(price, 4)
-        trade_id = ctx.store.apply_fill(day, t["symbol"], t["side"],
-                                        t["qty"], price, approval_id)
-        fills.append({"trade_id": trade_id, "symbol": t["symbol"],
-                      "side": t["side"], "qty": t["qty"], "price": price,
-                      "notional": round(t["qty"] * price, 2)})
+            # Pre-flight inventory/cash check before placing any order.
+            projected_cash = ctx.store.get_cash()
+            projected_pos = ctx.store.get_positions()
+            for t in proposal["trades"]:
+                if t["est_notional"] > max_notional:
+                    raise RuntimeError(
+                        "order notional %.2f exceeds cap %.2f"
+                        % (t["est_notional"], max_notional))
+                if t["side"] == "SELL":
+                    if projected_pos.get(t["symbol"], 0.0) < t["qty"]:
+                        raise RuntimeError("cannot sell %s x%s: not held"
+                                           % (t["symbol"], t["qty"]))
+                    projected_pos[t["symbol"]] -= t["qty"]
+                    projected_cash += t["est_notional"]
+                else:
+                    projected_cash -= t["est_notional"]
+                    projected_pos[t["symbol"]] = (
+                        projected_pos.get(t["symbol"], 0.0) + t["qty"])
+            if projected_cash < -1e-9:
+                raise RuntimeError("insufficient cash for proposed buys")
+
+            for t in proposal["trades"]:
+                oid = ctx.store.create_pending_order(
+                    day, t["symbol"], t["side"], t["qty"], t["est_price"],
+                    approval_id)
+                new_orders.append({"order_id": oid, "symbol": t["symbol"],
+                                   "side": t["side"], "qty": t["qty"],
+                                   "est_price": t["est_price"],
+                                   "est_notional": t["est_notional"]})
 
     return {
         "stage": "S6",
         "run_date": day,
         "status": "executed",
-        "approval_id": approval_id,
         "fills": fills,
+        "new_pending_orders": new_orders,
         "reconciliation": {
-            "orders": len(proposal["trades"]),
-            "fills": len(fills),
+            "fills_today": len(fills),
+            "orders_placed_for_next_day": len(new_orders),
             "cash_after": round(ctx.store.get_cash(), 2),
             "positions_after": ctx.store.get_positions(),
         },

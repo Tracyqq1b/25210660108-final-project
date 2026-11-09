@@ -2,31 +2,35 @@
   "metrics": {
     "baseline_buy_hold": {
       "breach_days": 0,
-      "end_value": 36775.21,
+      "end_value": 36739.8,
       "max_drawdown": -0.0235,
       "rebalance_days": 0,
-      "turnover": 0.0
+      "turnover": 0.0,
+      "unfilled_orders_at_window_end": 0
     },
     "candidate_drift_band_0.03": {
       "breach_days": 1,
-      "end_value": 36770.93,
+      "end_value": 36742.4,
       "max_drawdown": -0.0242,
       "rebalance_days": 1,
-      "turnover": 3516.12
+      "turnover": 3509.23,
+      "unfilled_orders_at_window_end": 0
     },
     "candidate_drift_band_0.08": {
       "breach_days": 0,
-      "end_value": 36775.21,
+      "end_value": 36739.8,
       "max_drawdown": -0.0235,
       "rebalance_days": 0,
-      "turnover": 0.0
+      "turnover": 0.0,
+      "unfilled_orders_at_window_end": 0
     },
     "current_rules_v1": {
       "breach_days": 1,
-      "end_value": 36751.47,
+      "end_value": 36739.55,
       "max_drawdown": -0.0235,
       "rebalance_days": 1,
-      "turnover": 1835.22
+      "turnover": 1811.73,
+      "unfilled_orders_at_window_end": 0
     }
   },
   "month": "2025-10",
@@ -58,13 +62,13 @@
       },
       "version": 1
     },
-    "reason": "drift_band 0.08 would have produced 0 breach days vs 1 under current rules on the fixed 2025-10 baseline replay, with turnover 0.00 vs 1835.22 and end value 36775.21 vs 36751.47"
+    "reason": "drift_band 0.08 would have produced 0 breach days vs 1 under current rules on the fixed 2025-10 baseline replay, with turnover 0.00 vs 1811.73 and end value 36739.80 vs 36739.55"
   },
   "rule_version_evaluated": 1,
   "run_date": "2025-10-31",
   "stage": "S7",
   "start_state": {
-    "cash": 5499.17,
+    "cash": 5463.76,
     "positions": {
       "AAPL": 20.0,
       "COST": 4.0,

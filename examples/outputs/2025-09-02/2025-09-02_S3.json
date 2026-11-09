@@ -12,6 +12,7 @@
     ],
     "S2_total_value": 34156.14
   },
+  "deferred": [],
   "rationale": "Breached rules at close of 2025-09-02: drift_band. Proposal trades the offending names back inside their bands (sells first, self-funding).",
   "rule_version": 1,
   "run_date": "2025-09-02",

@@ -50,15 +50,37 @@ class ApprovalGateTest(WorkflowTestCase):
 
     def test_fills_match_approved_proposal(self):
         controller.run_day(self.ctx(), self.DAY)
+        controller.run_day(self.ctx(), "2025-09-03")
         proposal = self.store.stage_artifact(self.DAY, "S3")
         approval = self.store.stage_artifact(self.DAY, "S5")
-        trades = self.store.get_trades(self.DAY)
+        # fills happen on the NEXT trading day, not the approval day
+        self.assertEqual(self.store.get_trades(self.DAY), [])
+        trades = self.store.get_trades("2025-09-03")
         self.assertEqual(len(trades), len(proposal["trades"]))
         for trade, planned in zip(trades, proposal["trades"]):
             self.assertEqual(trade["symbol"], planned["symbol"])
             self.assertEqual(trade["side"], planned["side"])
             self.assertEqual(trade["qty"], planned["qty"])
             self.assertEqual(trade["approval_id"], approval["approval_id"])
+
+    def test_approval_creates_pending_orders_filled_next_day(self):
+        from pma import datafeed
+        controller.run_day(self.ctx(), self.DAY)
+        pending = self.store.get_pending_orders()
+        self.assertTrue(pending, "approval should create pending orders")
+        self.assertEqual(pending[0]["created_date"], self.DAY)
+        self.assertEqual(pending[0]["status"], "pending")
+        self.assertEqual(self.store.get_trades(), [])
+
+        controller.run_day(self.ctx(), "2025-09-03")
+        self.assertEqual(self.store.get_pending_orders(), [])
+        fills = self.store.get_trades("2025-09-03")
+        self.assertEqual(len(fills), len(pending))
+        expected = datafeed.price_on("QQQ", "2025-09-03") * (
+            1 + self.cfg["execution"]["slippage_bps"] / 1e4)
+        self.assertAlmostEqual(fills[0]["price"], round(expected, 4),
+                               places=4)
+        self.assertEqual(fills[0]["approval_id"], pending[0]["approval_id"])
 
     def test_review_fails_tampered_prices(self):
         run_to(self.ctx(), self.store, self.DAY, "S4")

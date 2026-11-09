@@ -56,6 +56,20 @@ CREATE TABLE IF NOT EXISTS trades (
     approval_id INTEGER NOT NULL REFERENCES approvals(id),
     created_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS pending_orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_date TEXT NOT NULL,      -- approval day (T)
+    symbol TEXT NOT NULL,
+    side TEXT NOT NULL,
+    qty REAL NOT NULL,
+    est_price REAL NOT NULL,         -- T-day close, for reference
+    est_notional REAL NOT NULL,
+    approval_id INTEGER NOT NULL REFERENCES approvals(id),
+    status TEXT NOT NULL DEFAULT 'pending',   -- pending | filled
+    filled_date TEXT,                -- execution day (T+1)
+    fill_price REAL,
+    fill_notional REAL
+);
 CREATE TABLE IF NOT EXISTS adjustments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_date TEXT NOT NULL,
@@ -124,31 +138,75 @@ class StateStore:
         rows = self.conn.execute("SELECT symbol, qty FROM positions").fetchall()
         return {r["symbol"]: r["qty"] for r in rows}
 
+    def _book_fill(self, run_date, symbol, side, qty, price, approval_id):
+        """Insert the trade row and update cash/positions. Caller must hold
+        a transaction (`with self.conn`)."""
+        notional = qty * price
+        cur = self.conn.execute(
+            "INSERT INTO trades (run_date, symbol, side, qty, price,"
+            " notional, approval_id, created_at) VALUES"
+            " (?, ?, ?, ?, ?, ?, ?, ?)",
+            (run_date, symbol, side, qty, price, notional,
+             approval_id, time.time()))
+        cash = self.get_cash()
+        cash += -notional if side == "BUY" else notional
+        self.conn.execute("UPDATE portfolio SET cash = ? WHERE id = 1",
+                          (cash,))
+        pos = self.get_positions().get(symbol, 0.0)
+        pos += qty if side == "BUY" else -qty
+        if abs(pos) < 1e-9:
+            self.conn.execute("DELETE FROM positions WHERE symbol = ?",
+                              (symbol,))
+        else:
+            self.conn.execute(
+                "INSERT INTO positions (symbol, qty) VALUES (?, ?)"
+                " ON CONFLICT(symbol) DO UPDATE SET qty = excluded.qty",
+                (symbol, pos))
+        return cur.lastrowid
+
     def apply_fill(self, run_date, symbol, side, qty, price, approval_id):
         """Apply one sandbox fill atomically: trade row, position, cash."""
-        notional = qty * price
+        with self.conn:
+            return self._book_fill(run_date, symbol, side, qty, price,
+                                   approval_id)
+
+    # ---- pending orders (T-day approval -> T+1 execution) ----------------
+
+    def create_pending_order(self, created_date, symbol, side, qty,
+                             est_price, approval_id):
         with self.conn:
             cur = self.conn.execute(
-                "INSERT INTO trades (run_date, symbol, side, qty, price,"
-                " notional, approval_id, created_at) VALUES"
-                " (?, ?, ?, ?, ?, ?, ?, ?)",
-                (run_date, symbol, side, qty, price, notional,
-                 approval_id, time.time()))
-            cash = self.get_cash()
-            cash += -notional if side == "BUY" else notional
-            self.conn.execute("UPDATE portfolio SET cash = ? WHERE id = 1",
-                              (cash,))
-            pos = self.get_positions().get(symbol, 0.0)
-            pos += qty if side == "BUY" else -qty
-            if abs(pos) < 1e-9:
-                self.conn.execute("DELETE FROM positions WHERE symbol = ?",
-                                  (symbol,))
-            else:
-                self.conn.execute(
-                    "INSERT INTO positions (symbol, qty) VALUES (?, ?)"
-                    " ON CONFLICT(symbol) DO UPDATE SET qty = excluded.qty",
-                    (symbol, pos))
+                "INSERT INTO pending_orders (created_date, symbol, side,"
+                " qty, est_price, est_notional, approval_id) VALUES"
+                " (?, ?, ?, ?, ?, ?, ?)",
+                (created_date, symbol, side, qty, est_price,
+                 qty * est_price, approval_id))
         return cur.lastrowid
+
+    def get_pending_orders(self, status="pending"):
+        return [dict(r) for r in self.conn.execute(
+            "SELECT * FROM pending_orders WHERE status = ? ORDER BY id",
+            (status,)).fetchall()]
+
+    def fill_pending_order(self, order_id, fill_date, price):
+        """Fill one pending order atomically: trade row, position/cash
+        update, and order status flip -- a crashed fill never half-applies,
+        and a retried stage never fills the same order twice."""
+        with self.conn:
+            order = self.conn.execute(
+                "SELECT * FROM pending_orders WHERE id = ?",
+                (order_id,)).fetchone()
+            if order is None or order["status"] != "pending":
+                raise RuntimeError("order %s not fillable" % order_id)
+            trade_id = self._book_fill(fill_date, order["symbol"],
+                                       order["side"], order["qty"], price,
+                                       order["approval_id"])
+            self.conn.execute(
+                "UPDATE pending_orders SET status = 'filled',"
+                " filled_date = ?, fill_price = ?, fill_notional = ?"
+                " WHERE id = ?",
+                (fill_date, price, order["qty"] * price, order_id))
+        return trade_id
 
     def get_trades(self, run_date=None):
         sql = "SELECT * FROM trades"

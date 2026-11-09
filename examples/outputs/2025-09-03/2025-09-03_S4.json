@@ -1,0 +1,22 @@
+{
+  "checks": [
+    {
+      "check": "breach_in_flight:QQQ",
+      "detail": "drift_band breach on QQQ covered by pending order #1 (BUY)",
+      "pass": true
+    },
+    {
+      "check": "cash_nonnegative_after",
+      "detail": "simulated cash 10000.00",
+      "pass": true
+    }
+  ],
+  "independent_inputs": {
+    "source": "positions+cash from state, closes from cache",
+    "total_value": 34416.39
+  },
+  "run_date": "2025-09-03",
+  "stage": "S4",
+  "status": "pass",
+  "verdict": "Proposal reproduces from source data; all 2 checks passed."
+}

@@ -44,7 +44,11 @@ def reconstruct_start_state(ctx, window_days):
 
 def simulate(ctx, days, params, positions, cash):
     """Replay the deterministic drift-band policy over `days` with the
-    given rule parameters, starting from (positions, cash)."""
+    given rule parameters, starting from (positions, cash).
+
+    Execution model matches the live pipeline: a decision made on day T's
+    close fills at day T+1's price (pending-order model), so the replay
+    never assumes fills at decision-time prices."""
     positions = dict(positions)
     cash = float(cash)
     slip = ctx.cfg["execution"]["slippage_bps"] / 1e4
@@ -56,10 +60,31 @@ def simulate(ctx, days, params, positions, cash):
     turnover = 0.0
     breach_days = 0
     rebalance_days = 0
+    pending = []  # orders decided on the previous day
 
     for day in days:
         prices = {s: datafeed.price_on(s, day, ctx.cache_dir)
                   for s in universe}
+
+        # Fill yesterday's decisions at today's prices, sells first.
+        for sym, side, qty in sorted(pending,
+                                     key=lambda o: 0 if o[1] == "SELL"
+                                     else 1):
+            if side == "SELL":
+                price = prices[sym] * (1 - slip)
+                positions[sym] = positions.get(sym, 0.0) - qty
+                cash += qty * price
+            else:
+                price = prices[sym] * (1 + slip)
+                if qty * price > cash:
+                    continue
+                positions[sym] = positions.get(sym, 0.0) + qty
+                cash -= qty * price
+            turnover += qty * price
+        if pending:
+            rebalance_days += 1
+        pending = []
+
         values = {s: positions.get(s, 0.0) * prices[s] for s in universe}
         total = cash + sum(values.values())
         weights = {s: values[s] / total for s in universe}
@@ -72,7 +97,6 @@ def simulate(ctx, days, params, positions, cash):
         if breached:
             breach_days += 1
 
-        traded = False
         for sym in sorted(universe):
             w = weights[sym]
             t = targets.get(sym)
@@ -87,20 +111,7 @@ def simulate(ctx, days, params, positions, cash):
             qty = int(abs(diff) / prices[sym])
             if qty < 1:
                 continue
-            if diff < 0:
-                price = prices[sym] * (1 - slip)
-                positions[sym] -= qty
-                cash += qty * price
-            else:
-                price = prices[sym] * (1 + slip)
-                if qty * price > cash:
-                    continue
-                positions[sym] = positions.get(sym, 0.0) + qty
-                cash -= qty * price
-            turnover += qty * price
-            traded = True
-        if traded:
-            rebalance_days += 1
+            pending.append((sym, "SELL" if diff < 0 else "BUY", qty))
 
         total = cash + sum(positions.get(s, 0.0) * prices[s]
                            for s in universe)
@@ -114,6 +125,7 @@ def simulate(ctx, days, params, positions, cash):
         "turnover": round(turnover, 2),
         "breach_days": breach_days,
         "rebalance_days": rebalance_days,
+        "unfilled_orders_at_window_end": len(pending),
     }
 
 

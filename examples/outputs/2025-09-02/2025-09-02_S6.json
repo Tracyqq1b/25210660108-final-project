@@ -1,26 +1,26 @@
 {
-  "approval_id": 1,
-  "fills": [
+  "fills": [],
+  "new_pending_orders": [
     {
-      "notional": 4500.83,
-      "price": 562.6032,
+      "est_notional": 4498.58,
+      "est_price": 562.32,
+      "order_id": 1,
       "qty": 8,
       "side": "BUY",
-      "symbol": "QQQ",
-      "trade_id": 1
+      "symbol": "QQQ"
     }
   ],
   "reconciliation": {
-    "cash_after": 5499.17,
-    "fills": 1,
-    "orders": 1,
+    "cash_after": 10000.0,
+    "fills_today": 0,
+    "orders_placed_for_next_day": 1,
     "positions_after": {
       "AAPL": 20.0,
       "COST": 4.0,
       "IEF": 40.0,
       "MSFT": 8.0,
       "NVDA": 25.0,
-      "QQQ": 15.0
+      "QQQ": 7.0
     }
   },
   "run_date": "2025-09-02",

@@ -1,0 +1,27 @@
+{
+  "action": "HOLD",
+  "based_on": {
+    "S2_breaches": [
+      {
+        "limit": 0.05,
+        "rule": "drift_band",
+        "symbol": "QQQ",
+        "target": 0.25,
+        "value": 0.1153
+      }
+    ],
+    "S2_total_value": 34416.39
+  },
+  "deferred": [
+    {
+      "order_id": 1,
+      "reason": "breach already addressed by pending order #1 (BUY 8, approved 2025-09-02)",
+      "symbol": "QQQ"
+    }
+  ],
+  "rationale": "Breaches detected at close of 2025-09-03, but every affected name already has an in-flight order filling next trading day; no new orders.",
+  "rule_version": 1,
+  "run_date": "2025-09-03",
+  "stage": "S3",
+  "trades": []
+}

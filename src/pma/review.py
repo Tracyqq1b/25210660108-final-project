@@ -66,10 +66,20 @@ def review(ctx, day):
                   "selling %s of %.0f held" % (t["qty"], held))
 
     # 3. Every recomputed drift/cap breach must be addressed by a trade
-    #    in that symbol (unless below one lot).
+    #    in that symbol (unless below one lot) -- or by an in-flight order
+    #    approved earlier and filling on the next trading day.
+    pending = ctx.store.get_pending_orders()
+    in_flight = {o["symbol"]: o for o in pending}
     traded = {t["symbol"] for t in proposal["trades"]}
     for kind, sym in sorted(recomputed_breaches):
-        if sym not in traded:
+        if sym in in_flight:
+            o = in_flight[sym]
+            need_sell = weights[sym] > targets.get(sym, 0)
+            check("breach_in_flight:%s" % sym,
+                  o["side"] == ("SELL" if need_sell else "BUY"),
+                  "%s breach on %s covered by pending order #%d (%s)"
+                  % (kind, sym, o["id"], o["side"]))
+        elif sym not in traded:
             implied = abs((targets.get(sym, weights[sym]) - weights[sym])
                           * total / prices[sym])
             check("breach_addressed:%s" % sym, implied < 1.0,
@@ -94,6 +104,8 @@ def review(ctx, day):
                                for s in prices)
     for t in proposal["trades"]:
         sym = t["symbol"]
+        if sym in in_flight:
+            continue  # weight moves again when the in-flight order fills
         w_after = sim_pos.get(sym, 0.0) * prices[sym] / sim_total
         tgt = targets.get(sym)
         if tgt is not None:
