@@ -2,7 +2,7 @@
 
 Channels are configured in src/config.yaml under `notifications:` and are
 all opt-in. The webhook channel POSTs a small JSON payload to any endpoint
-(企业微信/Slack/custom); the email channel uses stdlib smtplib and reads
+(WeCom/Slack/custom); the email channel uses stdlib smtplib and reads
 the SMTP password only from the PMA_SMTP_PASSWORD environment variable so
 no secret ever lands in config files or git history.
 """

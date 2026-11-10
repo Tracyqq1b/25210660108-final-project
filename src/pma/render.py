@@ -33,54 +33,55 @@ def render_day(store, day):
     s5 = store.stage_artifact(day, "S5")
     s6 = store.stage_artifact(day, "S6")
 
-    lines = ["# 日终风险报告 %s" % day, ""]
-    lines.append("规则版本:v%s" % s2["rule_version"])
+    lines = ["# End-of-Day Risk Report %s" % day, ""]
+    lines.append("Rules version: v%s" % s2["rule_version"])
     lines.append("")
 
     prev = _prev_equity(store, day)
     change = ""
     if prev and prev[1]:
-        change = " (%+.2f%% 较 %s)" % (
+        change = " (%+.2f%% vs %s)" % (
             (s2["total_value"] / prev[1] - 1) * 100, prev[0])
-    lines.append("## 组合概览")
+    lines.append("## Portfolio overview")
     lines.append("")
-    lines.append("- 净值:%s%s" % (_fmt_money(s2["total_value"]), change))
-    lines.append("- 现金:%s" % _fmt_money(s2["cash"]))
-    lines.append("- 回撤:%s(阈值内:%s)" % (
+    lines.append("- Total value: %s%s" % (_fmt_money(s2["total_value"]),
+                                           change))
+    lines.append("- Cash: %s" % _fmt_money(s2["cash"]))
+    lines.append("- Drawdown: %s (within limit: %s)" % (
         _pct(s2["drawdown"]),
-        "是" if not any(b["rule"] == "max_drawdown" for b in s2["breaches"])
-        else "否"))
+        "yes" if not any(b["rule"] == "max_drawdown" for b in s2["breaches"])
+        else "NO"))
     lines.append("")
-    lines.append("| 标的 | 权重 |")
+    lines.append("| Symbol | Weight |")
     lines.append("| --- | --- |")
     for sym, w in sorted(s2["weights"].items()):
         lines.append("| %s | %s |" % (sym, _pct(w)))
     lines.append("")
 
-    lines.append("## 越界告警")
+    lines.append("## Rule breaches")
     lines.append("")
     if s2["breaches"]:
-        lines.append("| 规则 | 对象 | 当前值 | 阈值 |")
+        lines.append("| Rule | Subject | Value | Limit |")
         lines.append("| --- | --- | --- | --- |")
         for b in s2["breaches"]:
-            target = b.get("symbol") or b.get("sector") or "组合"
+            target = b.get("symbol") or b.get("sector") or "portfolio"
             lines.append("| %s | %s | %s | %s |" % (
                 b["rule"], target, b.get("value"), b.get("limit")))
     else:
-        lines.append("无越界。")
+        lines.append("No breaches.")
     lines.append("")
 
-    lines.append("## 处置")
+    lines.append("## Action")
     lines.append("")
     if s3 is None:
-        lines.append("信号阶段未运行。")
+        lines.append("Signal stage did not run.")
     elif s3["action"] == "HOLD":
         lines.append("**HOLD** — %s" % s3["rationale"])
     else:
         lines.append("**%s** — %s" % (s3["action"], s3["rationale"]))
         if s3["trades"]:
             lines.append("")
-            lines.append("| 方向 | 数量 | 标的 | 参考价 | 理由 |")
+            lines.append("| Side | Qty | Symbol | Ref price | Reason |")
             lines.append("| --- | --- | --- | --- | --- |")
             for t in s3["trades"]:
                 lines.append("| %s | %d | %s | %.2f | %s |" % (
@@ -89,20 +90,23 @@ def render_day(store, day):
         lines.append("")
         if s4:
             passed = sum(1 for c in s4["checks"] if c["pass"])
-            lines.append("- 独立复核(S4):**%s**(%d/%d 项检查通过)"
-                         % (s4["status"], passed, len(s4["checks"])))
+            lines.append("- Independent review (S4): **%s** (%d/%d checks "
+                         "passed)" % (s4["status"], passed,
+                                      len(s4["checks"])))
         if s5:
-            lines.append("- 人工审批(S5):**%s**%s" % (
+            lines.append("- Human approval (S5): **%s**%s" % (
                 s5["decision"],
                 " — " + s5["note"] if s5.get("note") else ""))
     if s6:
         if s6.get("fills"):
-            lines.append("- 执行对账(S6):%d 笔成交(T+1 执行),执行后现金 %s"
+            lines.append("- Execution & reconciliation (S6): %d fill(s) "
+                         "(T+1 execution); cash after: %s"
                          % (len(s6["fills"]),
                             _fmt_money(s6["reconciliation"]
                                        ["cash_after"])))
             lines.append("")
-            lines.append("| 成交 | 数量 | 标的 | 批准日参考价 | 成交价 | 价差 | 金额 |")
+            lines.append("| Fill | Qty | Symbol | Ref price (approval day) "
+                         "| Fill price | Diff | Notional |")
             lines.append("| --- | --- | --- | --- | --- | --- | --- |")
             for f in s6["fills"]:
                 lines.append("| %s | %d | %s | %.2f | %.4f | %+.4f | %s |"
@@ -111,23 +115,25 @@ def render_day(store, day):
                                 f["price_deviation"],
                                 _fmt_money(f["notional"])))
         else:
-            lines.append("- 执行对账(S6):今日无成交")
+            lines.append("- Execution & reconciliation (S6): no fills today")
         if s6.get("new_pending_orders"):
-            lines.append("- 新挂待执行订单 %d 笔(次日成交):%s" % (
-                len(s6["new_pending_orders"]),
-                "; ".join("%s %d×%s" % (o["side"], o["qty"], o["symbol"])
-                          for o in s6["new_pending_orders"])))
+            lines.append("- %d new pending order(s) placed, filling next "
+                         "trading day: %s" % (
+                             len(s6["new_pending_orders"]),
+                             "; ".join("%s %d x %s" % (
+                                 o["side"], o["qty"], o["symbol"])
+                                 for o in s6["new_pending_orders"])))
     lines.append("")
 
-    lines.append("## 审计链(artifact 哈希)")
+    lines.append("## Audit chain (artifact hashes)")
     lines.append("")
     for stage in ["S1", "S2", "S3", "S4", "S5", "S6"]:
         row = store.conn.execute(
             "SELECT artifact_hash, status FROM stage_runs"
             " WHERE run_date = ? AND stage = ?", (day, stage)).fetchone()
         if row:
-            lines.append("- %s:%s(%s)" % (stage, row["artifact_hash"],
-                                          row["status"]))
+            lines.append("- %s: %s (%s)" % (stage, row["artifact_hash"],
+                                            row["status"]))
     lines.append("")
     return "\n".join(lines)
 
@@ -138,25 +144,26 @@ def render_approval_request(store, day):
     s3 = store.stage_artifact(day, "S3")
     s4 = store.stage_artifact(day, "S4")
     s2 = store.stage_artifact(day, "S2")
-    lines = ["# 审批单 %s" % day, ""]
-    lines.append("**动作**:%s(规则版本 v%s)" % (s3["action"],
-                                               s3["rule_version"]))
+    lines = ["# Approval Request %s" % day, ""]
+    lines.append("**Action**: %s (rules version v%s)" % (s3["action"],
+                                                         s3["rule_version"]))
     lines.append("")
-    lines.append("**理由**:%s" % s3["rationale"])
+    lines.append("**Rationale**: %s" % s3["rationale"])
     lines.append("")
     if s2 and s2["breaches"]:
-        lines.append("## 触发越界")
+        lines.append("## Triggering breaches")
         lines.append("")
-        lines.append("| 规则 | 对象 | 当前值 | 阈值 |")
+        lines.append("| Rule | Subject | Value | Limit |")
         lines.append("| --- | --- | --- | --- |")
         for b in s2["breaches"]:
-            target = b.get("symbol") or b.get("sector") or "组合"
+            target = b.get("symbol") or b.get("sector") or "portfolio"
             lines.append("| %s | %s | %s | %s |" % (
                 b["rule"], target, b.get("value"), b.get("limit")))
         lines.append("")
-    lines.append("## 拟执行交易(T+1 成交)")
+    lines.append("## Proposed trades (filled T+1)")
     lines.append("")
-    lines.append("| 方向 | 数量 | 标的 | 参考价 | 估计金额 | 理由 |")
+    lines.append("| Side | Qty | Symbol | Ref price | Est notional "
+                 "| Reason |")
     lines.append("| --- | --- | --- | --- | --- | --- |")
     for t in s3["trades"]:
         lines.append("| %s | %d | %s | %.2f | %s | %s |" % (
@@ -165,25 +172,27 @@ def render_approval_request(store, day):
     lines.append("")
     if s4:
         passed = sum(1 for c in s4["checks"] if c["pass"])
-        lines.append("## 独立复核(S4)")
+        lines.append("## Independent review (S4)")
         lines.append("")
-        lines.append("结论:**%s**(%d/%d 项检查通过)" % (
+        lines.append("Verdict: **%s** (%d/%d checks passed)" % (
             s4["status"], passed, len(s4["checks"])))
         for c in s4["checks"]:
             if not c["pass"]:
-                lines.append("- 未通过:%s — %s" % (c["check"],
-                                                   c["detail"]))
+                lines.append("- FAILED: %s — %s" % (c["check"],
+                                                    c["detail"]))
         lines.append("")
-    lines.append("## 如何批复")
+    lines.append("## How to decide")
     lines.append("")
     lines.append("```sh")
-    lines.append("python3 src/pma/cli.py approve --day %s          # 批准"
-                 % day)
-    lines.append("python3 src/pma/cli.py approve --day %s --reject # 驳回"
-                 % day)
+    lines.append("python3 src/pma/cli.py approve --day %s          "
+                 "# approve" % day)
+    lines.append("python3 src/pma/cli.py approve --day %s --reject "
+                 "# reject" % day)
     lines.append("```")
     lines.append("")
-    lines.append("批准后流程自动续跑:订单挂为待执行,次一交易日成交并对账。")
+    lines.append("On approval the run resumes automatically: orders become "
+                 "pending and fill on the next trading day with full "
+                 "reconciliation.")
     lines.append("")
     return "\n".join(lines)
 
@@ -199,14 +208,16 @@ def render_month(store, month):
         return None
     s7 = store.get_artifact(rows[0]["artifact_hash"])
 
-    lines = ["# 月度规则评估报告 %s" % month, ""]
-    lines.append("评估窗口:%s 至 %s(%d 个交易日),被评估规则版本:v%s" % (
-        s7["window"]["start"], s7["window"]["end"], s7["window"]["days"],
-        s7["rule_version_evaluated"]))
+    lines = ["# Monthly Rules Evaluation Report %s" % month, ""]
+    lines.append("Window: %s to %s (%d trading days); rules version "
+                 "evaluated: v%s" % (
+                     s7["window"]["start"], s7["window"]["end"],
+                     s7["window"]["days"], s7["rule_version_evaluated"]))
     lines.append("")
-    lines.append("## 固定基线回放对比")
+    lines.append("## Fixed-baseline replay comparison")
     lines.append("")
-    lines.append("| 口径 | 期末净值 | 最大回撤 | 换手 | 越界天数 | 再平衡天数 |")
+    lines.append("| Scenario | End value | Max drawdown | Turnover "
+                 "| Breach days | Rebalance days |")
     lines.append("| --- | --- | --- | --- | --- | --- |")
     for name, m in s7["metrics"].items():
         lines.append("| %s | %s | %s | %s | %d | %d |" % (
@@ -214,15 +225,19 @@ def render_month(store, month):
             _fmt_money(m["turnover"]), m["breach_days"],
             m["rebalance_days"]))
     lines.append("")
-    lines.append("## 结论")
+    lines.append("## Conclusion")
     lines.append("")
     if s7["proposal"]:
-        lines.append("**改参提案**:%s" % s7["proposal"]["reason"])
+        lines.append("**Parameter-change proposal**: %s"
+                     % s7["proposal"]["reason"])
         lines.append("")
-        lines.append("提案需经人工批准后生效(`apply-rules`);拒绝则维持"
-                     "当前规则。")
+        lines.append("The proposal takes effect only after human approval "
+                     "(`apply-rules`); if rejected, the current rules stay "
+                     "in force.")
     else:
-        lines.append("本月不建议改参:没有候选参数同时满足\"期末净值不低于"
-                     "买入持有基线且越界天数严格更少\"的入选条件。")
+        lines.append("No parameter change recommended this month: no "
+                     "candidate met both admission criteria (end value at "
+                     "least the buy-and-hold baseline, and strictly fewer "
+                     "breach days than the current rules).")
     lines.append("")
     return "\n".join(lines)

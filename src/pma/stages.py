@@ -308,10 +308,10 @@ def s5_approval(ctx, day, auto=False, note=""):
                     fh.write(doc)
             notify.send(
                 ctx.cfg,
-                "[PMA] %s 再平衡提案待审批" % day,
-                "%s；%d 笔交易待批准。批复:python3 src/pma/cli.py approve "
-                "--day %s" % (proposal["action"], len(proposal["trades"]),
-                              day))
+                "[PMA] Rebalance proposal awaiting approval — %s" % day,
+                "%s; %d trade(s) pending your decision. Decide with: "
+                "python3 src/pma/cli.py approve --day %s"
+                % (proposal["action"], len(proposal["trades"]), day))
             raise AwaitingApproval(day)
         decision = existing["decision"]
         note = note or "operator decision via approve command"

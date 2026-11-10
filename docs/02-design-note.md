@@ -1,78 +1,175 @@
-# 第 2 部分:架构设计说明(Design Note)
+# Part 2: Architecture Design Note
 
-配套图:`docs/03-workflow-diagram.md`。实现代码:`src/pma/`。
+Companion diagram: `docs/03-workflow-diagram.md`. Implementation: `src/pma/`.
 
-## 2.1 角色与交接(Roles and Handoffs)
+## 2.1 Roles and handoffs
 
-工作流由两类组件构成:**编排器(controller)** 负责执行控制,**阶段(stages)** 负责领域逻辑。阶段内的计算全部是确定性代码;LLM Agent 只承担判断性与叙述性工作,其产出不直接进入数值链路。
+The workflow has two kinds of components: the **controller** owns
+execution control, and the **stages** own domain logic. All arithmetic
+inside stages is deterministic code; LLM agents carry only judgment and
+narrative work, and their output never enters the numeric pipeline.
 
-| 角色 | 职责 | 工具 / 权限 | 输入 → 产出 |
+| Role | Responsibility | Tools / permissions | Input → Output |
 | --- | --- | --- | --- |
-| 编排器 Controller(代码,`controller.py`) | 依赖排序、调度、重试、检查点续跑、崩溃注入、审批门 | SQLite 读写;无网络 | 交易日 → 按序调用 S1–S6 |
-| S1 数据接入(代码,`stages.s1_ingest`) | 经数据层拉取日终快照;存在收件箱持仓快照时先对账,分歧即停工升级 | 数据层只读(网络仅限 `refresh` 命令,运行期离线);收件箱只读 | 日期 → 行情快照 + 对账结果 |
-| S2 风险监控(代码,`stages.s2_monitor`) | 权重、回撤、集中度、越界判定,记录净值 | 状态库只读 + 净值写入 | 快照 → 风险报告 |
-| S3 信号 Agent(代码计算 + LLM 叙述,提示词 `prompts/signal-agent.md`) | 越界 → 调仓方案(方向/数量/理由) | 无工具;输入为 S2 报告 | 风险报告 → 再平衡提案 |
-| S4 独立复核(代码,`review.py`) | **不复用 S3 的任何数字**,从原始持仓与原始行情重算并逐项核对 | 状态库只读、数据层只读 | 提案 → 通过/驳回 + 逐项检查表 |
-| S5 人工审批(人,`stages.s5_approval` 提供异步门) | 审批单落盘 `runs/approvals/` 并推送(桌面/webhook/邮件);`approve` 命令记录批复;HOLD 自动归档;演示/测试可显式 `--auto-approve` 并在审计备注中标记 | 通知渠道 + CLI | 提案+复核 → 审批记录(含提案哈希) |
-| S6 执行对账(代码,`stages.s6_execute`) | T+1 模型:T 日批准 → 挂待执行订单;T+1 按当日价格成交(±滑点)、预检现金/库存、原子化入账、披露价差 | 状态库事务写 | 审批 → 待执行订单 → 次日成交日志 + 对账报告 |
-| S7 规则评估 Agent(代码回放 + LLM 总结,`rules_eval.py`,提示词 `prompts/rules-agent.md`) | 月度规则复盘,候选参数对固定基线回放,产出改参提案 | 状态库只读、数据层只读 | 月度历史 → 评估报告 + 改参提案 |
-| 报告渲染器(代码,`render.py`) | 把 artifact 链渲染为给人读的日终/月度 Markdown 报告;不做计算,数字全部引自 artifact,报告底部附审计链哈希 | 状态库只读 | artifacts → 日终报告 / 月度报告 |
+| Controller (code, `controller.py`) | Dependency ordering, scheduling, retries, checkpoint resume, crash injection, approval gate | SQLite read/write; no network | Trading day → invokes S1–S6 in order |
+| S1 Ingestion (code, `stages.s1_ingest`) | Pull the EOD snapshot via the data layer; if an inbox positions snapshot exists, reconcile first — divergence stops the day and escalates | Data layer read-only (network only in the `refresh` command; offline at run time); inbox read-only | Date → market snapshot + reconciliation result |
+| S2 Risk monitoring (code, `stages.s2_monitor`) | Weights, drawdown, concentration, breach detection; records equity | State store read + equity write | Snapshot → risk report |
+| S3 Signal agent (code for math + LLM for narrative; prompt `prompts/signal-agent.md`) | Breaches → rebalance proposal (side/qty/rationale) | No tools; input is the S2 report | Risk report → rebalance proposal |
+| S4 Independent review (code, `review.py`) | **Reuses none of S3's numbers**: recomputes from raw positions and raw prices, checks item by item | State store read-only, data layer read-only | Proposal → pass/fail + check list |
+| S5 Human approval (human; `stages.s5_approval` is the async gate) | Approval request written to `runs/approvals/` and pushed (desktop/webhook/email); the `approve` command records the decision; HOLD auto-archives; `--auto-approve` exists for demos/tests and is always marked in the audit note | Notification channels + CLI | Proposal + review → approval record (with proposal hash) |
+| S6 Execution & reconciliation (code, `stages.s6_execute`) | T+1 model: day-T approval → pending order; on T+1 fill at that day's price (± slippage), pre-flight cash/inventory checks, atomic booking, price-difference disclosure | State store transactional writes | Approval → pending orders → next-day fill log + reconciliation |
+| S7 Rules evaluation agent (code replay + LLM summary; `rules_eval.py`, prompt `prompts/rules-agent.md`) | Monthly rules retrospective; candidate parameters replayed against a fixed baseline; change proposals | State store read-only, data layer read-only | Monthly history → evaluation report + change proposal |
+| Report renderer (code, `render.py`) | Renders artifact chains into human-readable daily/monthly Markdown reports; does no arithmetic — every figure is copied from artifacts, audit-chain hashes in the footer | State store read-only | Artifacts → daily report / monthly report |
 
-**为什么这样分工**
+**Why the work is divided this way**
 
-- **计算交给代码,判断交给 Agent**:权重、调仓量、对账、回测都是确定性计算,用 LLM 只会引入不可复现的数值风险。LLM 的价值在 S3 的理由组织、S4 的意见撰写、S7 的复盘总结——这些是对结构化结果的解释,不反过来影响数值。给人读的日终/月度报告由渲染器(`render.py`)从 artifact 机械生成,报告骨架与全部数字由代码保证,LLM 叙述段落只填充解释性文字。
-- **S4 与 S3 独立**:复核器重新从状态库和价格缓存取数,重算权重、越界、模拟成交后权重,再与提案声明比对。它不是"再看一遍"提案,而是一次独立复算(`test_review_fails_tampered_prices` 验证篡改必判 fail)。
-- **Agent 决策 vs 编排器执行控制**:"是否再平衡、改不改参数"是 Agent/人的决策;"何时跑、跑哪一步、失败重试几次、中断后从哪续"全部由编排器决定,阶段自身对此无感知。
+- **Code computes, agents judge**: weights, order quantities,
+  reconciliation, and replays are deterministic computations — an LLM
+  would only add irreproducible numeric risk. The LLM's value is in S3's
+  rationale writing, S4's opinion drafting, and S7's retrospective
+  narrative — explanations of structured results that never feed back into
+  the numbers. The human-readable reports are mechanically rendered from
+  artifacts by `render.py`; the skeleton and all figures are guaranteed by
+  code, and LLM narrative only fills explanatory prose.
+- **S4 is independent of S3**: the reviewer re-reads positions from the
+  store and prices from the cache, recomputes weights, breaches, and
+  simulated post-trade weights, then compares against what the proposal
+  claims. It is not a second read of the proposal; it is an independent
+  recomputation (`test_review_fails_tampered_prices` proves tampering
+  fails review).
+- **Agent decisions vs controller execution control**: "rebalance or not,
+  change parameters or not" are agent/human decisions; "when to run, which
+  stage, how many retries, where to resume after a crash" belong entirely
+  to the controller, and stages are unaware of them.
 
-**交接与审计链**:每个阶段产出内容寻址(SHA-256)的 artifact,S3 引用 S2 的越界清单,S5 审批记录 S3 提案的哈希,S6 成交记录审批 ID。任何一环内容被篡改,下游哈希校验即失败。
+**Handoffs and the audit chain**: every stage produces a content-addressed
+(SHA-256) artifact; S3 cites S2's breach list, the S5 approval records the
+S3 proposal's hash, and S6 fills record the approval ID. Tampering with
+any link breaks a downstream hash check.
 
-## 2.2 长运行设计(Long-running Operation)
+## 2.2 Long-running operation
 
-**持久状态与检查点**:单一 SQLite 库(`runs/state.db`)保存:持仓/现金(当前态)、成交与审批(只追加)、**待执行订单 `pending_orders`(T 日批准、T+1 成交的跨日状态)**、外部调整 `adjustments`(只追加:手动交易、分红、拆股经对账入账)、`stage_runs` 检查点表(按 `run_date × stage` 记录 running/done/failed 与 attempts)、artifact 表、规则版本表、净值曲线。状态库是唯一事实来源:持仓只经两条留痕路径变更——S6 的审批成交,或人工确认的 `import-positions` 调整。
+**Persistent state and checkpoints**: a single SQLite store
+(`runs/state.db`) holds: positions/cash (current state), fills and
+approvals (append-only), **pending orders (`pending_orders`: approved on
+day T, filled on T+1 — cross-day state)**, external `adjustments`
+(append-only: manual trades, dividends, splits booked via reconciliation),
+the `stage_runs` checkpoint table (`running/done/failed/waiting` plus
+attempts, keyed by `run_date × stage`), the artifact table, the rule
+version table, and the equity curve. The store is the single source of
+truth: positions change through exactly two audited paths — approved S6
+fills, or human-confirmed `import-positions` adjustments.
 
-**T+1 执行与在途订单**:批准后订单进入 `pending_orders` 而非立即成交;次日 S6 先以当日价格消化在途订单(卖单优先,自我筹资;现金/库存不足即停工升级),再把当日批准的提案转为新的待执行订单。`fill_pending_order` 是单事务操作(成交行 + 持仓现金 + 订单状态翻转),崩溃或重试不会重复成交。信号与复核都把在途订单纳入考量:S3 对已有在途订单的标的不重复下单(提案中标注 deferred),S4 核对在途订单方向确实在修复对应越界。
+**Idempotent resume**: before running any stage the controller checks its
+checkpoint: `done` stages are skipped untouched (not even `begin_stage` is
+called, so `attempts` does not grow — verifiable evidence of "not
+re-executed"). Restarting the same command after an interruption resumes
+exactly at the first incomplete stage. `docs/evidence/recovery.log` shows
+a crash after S3 and a restart that skips S1–S3.
 
-**持仓对账与升级**:S1 发现收件箱快照与记录状态分歧时抛 `PositionsDivergedError`,重试耗尽后当日流程停在 S1(`docs/evidence/reconciliation.log` 演示了"分歧 → 停工 → 人工入账 → 检查点续跑"的全过程)。这保证工作流外的操作永远不会静默丢失——S7 的窗口起点重建(`reconstruct_start_state`)同时反向回滚成交与调整,任何时刻的历史状态都可精确复原。
+**Positions reconciliation and escalation**: if the inbox snapshot
+disagrees with recorded state, S1 raises `PositionsDivergedError`; after
+retries exhaust, the day stops at S1 (`docs/evidence/reconciliation.log`
+shows the full loop: divergence → stop → human booking → checkpoint
+resume). Operations outside the workflow can never be silently lost — and
+S7's window-start reconstruction (`reconstruct_start_state`) reverses
+both fills and adjustments, so the historical state at any day is exactly
+recoverable.
 
-**幂等续跑**:编排器执行任何阶段前先查检查点:`done` 即跳过,连 `begin_stage` 都不调用(attempts 不再增长,这是"未重复执行"的可验证证据)。中断后重新启动同一命令,从第一个未完成阶段精确续跑。`docs/evidence/recovery.log` 演示了 S3 后崩溃、重启后 S1–S3 被跳过的全过程。
+**T+1 execution and in-flight orders**: approval creates a pending order
+rather than an immediate fill; the next day's S6 first works through
+in-flight orders at that day's prices (sells first for self-funding;
+insufficient cash/inventory stops the day and escalates), then converts
+that day's approved proposal into new pending orders.
+`fill_pending_order` is a single transaction (trade row + position/cash +
+order status flip), so a crash or retry never fills twice. Signal and
+review both account for in-flight orders: S3 does not double-order a
+symbol with a pending order (noted as deferred in the proposal), and S4
+verifies each in-flight order's direction actually repairs its breach.
 
-**依赖与调度**:S1–S6 严格线性依赖;S7 依赖一个月的累积历史,由月界触发(`replay --with-rules-eval` 在每月最后一个交易日自动执行,同样走检查点)。生产部署时,`run-day` 挂在收盘后定时器(如 cron 16:30 ET),事件触发等价于手动执行一次 `run-day`。
+**Dependencies and scheduling**: S1–S6 are strictly linear; S7 depends on
+a month of accumulated history and fires at month boundaries
+(`replay --with-rules-eval` runs it on each month's last trading day,
+checkpointed like any stage). In production, `run-day` hangs off an
+after-close scheduler (e.g. cron 16:30 ET), and an event trigger is
+equivalent to running `run-day` manually.
 
-**重试与升级**:阶段失败 → `fail_stage` 记录 → 指数退避(2^n 秒,上限 8s)重试,最多 3 次;仍失败则抛 `PipelineError` 终止当日流程并保留现场,等待人工介入(升级规则:连续重试耗尽即升级,不静默吞错)。
+**Retries and escalation**: stage failure → `fail_stage` records it →
+exponential backoff (2^n s, capped at 8s), at most 3 retries; then a
+`PipelineError` ends the day, preserving the scene for a human
+(escalation rule: exhausting retries escalates; errors are never silently
+swallowed).
 
-**限额与权限**(声明于 `src/config.yaml` 的 `limits`,由编排器/执行层强制):
+**Limits and permissions** (declared in `src/config.yaml` under `limits`,
+enforced by the controller/execution layer):
 
-- 单阶段超时 300 秒;每日流程截止 2 小时
-- 单笔订单名义金额上限 $20,000(S6 预检强制)
-- 网络权限:仅数据拉取命令可用网,运行期阶段全部离线
-- 交易权限:仅沙盒;文件权限:仅项目目录
+- Stage timeout 300 s; daily deadline 2 hours
+- Per-order notional cap $20,000 (enforced in S6 pre-flight)
+- Network: only the data-refresh command may use the network; all run-time
+  stages are offline
+- Trading: sandbox only; filesystem: project directory only
 
-**时间、成本约束**:每日流程为 6 个轻量阶段(本地计算),成本远低于限额;真正昂贵的操作(联网拉数据、人工审批)被隔离在显式命令中。
+**Time and cost**: a daily run is six lightweight local-computation
+stages, far below the limits; the genuinely expensive operations (network
+fetches, human approval) are isolated into explicit commands.
 
-## 2.3 验证与改进(Verification and Improvement)
+## 2.3 Verification and improvement
 
-**独立于生产者的检查**:S4 复核(见 2.1)。此外 `tests/` 固化三类性质:恢复(`test_recovery.py`)、无未来数据(`test_no_leakage.py`)、审批门与复核独立性(`test_review_gate.py`)。
+**Checks independent of the producer**: S4 review (see 2.1). In addition,
+`tests/` freezes three property families: recovery
+(`test_recovery.py`), no future information (`test_no_leakage.py`), and
+the approval gate plus review independence (`test_review_gate.py`), async
+approval (`test_async_approval.py`), reconciliation
+(`test_reconciliation.py`), and report rendering (`test_report.py`).
 
-**后果性动作前的人工批准**:两处人工门——S5(任何下单前)、`apply-rules`(任何规则参数变更前)。两处都写入只追加的审批记录。S5 是**异步门**:提案经复核后,工作流生成审批单(`runs/approvals/<日期>.md`,含触发越界、拟执行交易、复核结论)并通过配置的渠道推送(桌面通知 / webhook / 邮件,SMTP 密码只从环境变量读取),随后当日流程以 `waiting` 状态干净暂停——不占进程、不算失败、不消耗重试;操作员批复(`approve --day <日期> [--reject]`)后同日自动从检查点续跑。证据:`docs/evidence/approval-flow.log`。
+**Human approval before consequential actions**: two human gates — S5
+(before any order) and `apply-rules` (before any rule-parameter change).
+Both write append-only approval records. S5 is an **asynchronous gate**:
+once a proposal passes review, the workflow writes an approval request
+(`runs/approvals/<date>.md`, with triggering breaches, proposed trades,
+and the review verdict) and pushes it through the configured channels
+(desktop notification / webhook / email; the SMTP password is read only
+from an environment variable), then pauses the day in a clean `waiting`
+state — holding no process, counting no failure, consuming no retries.
+The operator decides (`approve --day <date> [--reject]`) and the day
+resumes from checkpoints automatically. Evidence:
+`docs/evidence/approval-flow.log`.
 
-**有界修订循环**:S3→S4 构成单日内的修订循环:S4 判 fail 则当日流程停在 S4,不会进入审批与执行;修订(修正提案)后重跑,S4 检查点失效重算,最多到当日截止时限即升级人工。循环有界:重试 ≤3、时限 2 小时、fail 即停。
+**Bounded revision loop**: S3→S4 form the intra-day revision loop: a
+failed S4 stops the day at S4 without reaching approval or execution;
+after the proposal is fixed the day re-runs and the S4 checkpoint is
+recomputed, bounded by retry ≤ 3 and the 2-hour daily deadline, with
+escalation to a human at the bound.
 
-**变更的测试—接受—记录—回滚**(S7 链路):
+**Change testing, acceptance, versioning, rollback** (the S7 chain):
 
-1. **固定基线**:每月末,将窗口起点状态精确重建(反向回滚窗口内成交),在同一窗口上回放三套规则:买入持有基线、当前规则、候选参数(漂移带网格 0.03/0.05/0.08)。
-2. **接受/拒绝**:候选须在基线之上(期末值不低于买入持有)且越界天数严格少于当前规则,才形成提案;提案连证据一并进入人工审批,拒绝则不留痕于规则表。
-3. **版本记录**:批准即写入新 `rule_versions` 行(只追加,旧版本标 superseded,参数与理由全留痕)。
-4. **回滚**:`rollback-rules --to N` 以目标版本的参数生成新的活动版本——回滚本身也是一次留痕变更,历史不可改写。
+1. **Fixed baseline**: at each month end, the window-start state is
+   reconstructed exactly (reversing in-window fills and adjustments), and
+   three rule sets replay over the same window: buy-and-hold baseline,
+   current rules, and candidates (drift-band grid 0.03/0.05/0.08).
+2. **Accept/reject**: a candidate becomes a proposal only if it beats the
+   baseline (end value no lower than buy-and-hold) and has strictly fewer
+   breach days than the current rules; the proposal enters human approval
+   with evidence attached, and rejection leaves no trace in the rules
+   table.
+3. **Versioning**: approval appends a new `rule_versions` row (superseding
+   the old one; parameters and rationale kept forever).
+4. **Rollback**: `rollback-rules --to N` issues a new active version whose
+   parameters equal the target's — rollback is itself an audited change;
+   history is never rewritten.
 
-**防未来信息泄露**:数据层唯一入口强制 `as_of`;S7 回放的窗口起点由成交反向重建而非查询"当时快照",逐日读取以当日为截止;非交易日取价直接报错。测试抽查多个日期验证。
+**Future-information leakage control**: the data layer's single entry
+point enforces `as_of`; S7 replays reconstruct the window start by
+reversing recorded events rather than querying "what we knew then", with
+each replay day cut off at itself; non-trading-day price lookups raise.
+Tests spot-check multiple dates.
 
-## 2.4 参考实现与生产替换点
+## 2.4 Reference implementation vs production replacement points
 
-| 参考实现(本仓库) | 生产替换 |
+| Reference implementation (this repo) | Production replacement |
 | --- | --- |
-| 东方财富 K 线 API + 本地缓存 | 券商/数据商实时接口 |
-| 持仓 CSV 收件箱 + 人工对账 | 券商只读持仓 API + 自动对账 |
-| 沙盒成交(收盘价±滑点) | 券商模拟盘/实盘 API |
-| 终端交互审批 | IM/邮件审批回调 |
-| `replay` 按交易日历驱动 | cron/调度器 + 事件监听 |
-| LLM 叙述层为提示词文件(未接入运行时) | 接入任一 LLM harness,按 `prompts/` 规格实例化 |
+| East Money kline API + local cache | Broker/vendor real-time feed |
+| Positions CSV inbox + human reconciliation | Read-only broker positions API + automatic reconciliation |
+| Sandbox fills (close ± slippage) | Broker paper/live trading API |
+| `replay` driven by the trading calendar | cron/scheduler + event listeners |
+| LLM narrative layer delivered as prompt files (not wired to a runtime) | Any LLM harness instantiating the roles per `prompts/` |

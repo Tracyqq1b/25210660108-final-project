@@ -32,7 +32,7 @@ class AsyncApprovalTest(WorkflowTestCase):
         self.assertTrue(os.path.exists(doc))
         with open(doc) as fh:
             text = fh.read()
-        self.assertIn("# 审批单 %s" % self.DAY, text)
+        self.assertIn("# Approval Request %s" % self.DAY, text)
         self.assertIn("approve --day %s" % self.DAY, text)
 
     def test_approve_resumes_and_places_pending_orders(self):

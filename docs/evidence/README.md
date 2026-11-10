@@ -1,16 +1,19 @@
-# 验证与恢复证据(Evidence)
+# Verification & Recovery Evidence
 
-本目录存放工作流验证证据,全部为脚本实际运行的原始输出,未手工编辑。
+Raw, unedited outputs of the workflow's verification runs.
 
-| 文件 | 证明内容 |
+| File | What it proves |
 | --- | --- |
-| `tests.log` | 11 个自动化测试全部通过:检查点续跑不重复已完阶段、崩溃运行与干净运行到达相同状态、as-of 截止点阻断未来数据、无审批不执行、审批哈希不匹配拒绝执行、篡改的提案被独立复核判 fail |
-| `replay.log` | 2025-09-02 至 2025-10-31 共 44 个交易日的完整回放:每日 S1–S6 顺序执行,月末自动触发 S7 规则评估;9 月无改参建议,10 月产出 drift_band 改参提案 |
-| `recovery.log` | 中断恢复演示:在 2025-09-10 的 S3 之后注入崩溃(退出码 75),重新启动后 S1–S3 被检查点跳过(attempts 保持 1),仅续跑 S4–S6 |
-| `rules-lifecycle.log` | 规则版本生命周期:S7 提案经人工批准后成为 v2,随后回滚到 v1(记为 v3,审计链为只追加,不删历史) |
-| `approval-flow.log` | 异步人工审批:S5 以 waiting 状态干净暂停,审批单落盘并推送通知,`approve` 批复后当日从检查点自动续跑完成 |
-| `reconciliation.log` | 持仓对账:收件箱快照与记录状态分歧 → 当日流程停在 S1 → 人工 `import-positions` 入账调整 → 检查点续跑完成 |
+| `tests.log` | All 24 automated tests pass: checkpoint resume never repeats completed stages, a crashed run reaches the same state as a clean run, the as-of cutoff blocks future rows, no execution without approval, hash-mismatched approvals are refused, tampered proposals fail independent review, T+1 fills land the next day, async approval pauses/resumes cleanly, reconciliation catches divergence |
+| `replay.log` | Full replay of 44 trading days (2025-09-02 to 2025-10-31): S1–S6 in order each day, S7 rules evaluation fires automatically at month ends; September proposes no change, October proposes a drift-band change |
+| `recovery.log` | Interruption recovery: a crash is injected after S3 on 2025-09-10 (exit code 75); after restart, S1–S3 are skipped by checkpoints (attempts stay 1) and only S4–S6 resume |
+| `approval-flow.log` | Async human approval: S5 pauses cleanly in `waiting` state, the approval request is written to disk and pushed, the `approve` decision resumes the day to completion from checkpoints |
+| `reconciliation.log` | Positions reconciliation: inbox snapshot diverges from recorded state → the day stops at S1 → the human books adjustments via `import-positions` → checkpoint resume completes the day |
+| `rules-lifecycle.log` | Rules version lifecycle: an S7 proposal becomes v2 after human approval, then rolls back to v1 (recorded as v3; the audit trail is append-only, history is never deleted) |
 
-示例工作产物(日报、提案、复核意见、审批记录、成交对账)见 `examples/outputs/`;
-其中 `examples/outputs/2025-09-02/` 是批准日的完整链条(S3 提案 + S4 复核 + S5 审批 + S6 挂待执行订单),
-`examples/outputs/2025-09-03/` 是次日成交与对账(T+1 执行,含批准参考价与成交价的逐笔价差)。
+Example work products (daily reports, proposals, review verdicts, approval
+records, fill reconciliation) live in `examples/outputs/`:
+`examples/outputs/2025-09-02/` is the full approval-day chain (S3 proposal
++ S4 review + S5 approval + S6 pending order), and
+`examples/outputs/2025-09-03/` is next-day execution (T+1 fills with
+per-fill approval-price vs fill-price disclosure).

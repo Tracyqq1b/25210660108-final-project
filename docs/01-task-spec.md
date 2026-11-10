@@ -1,81 +1,156 @@
-# 第 1 部分:任务规格(Task Specification)
+# Part 1: Task Specification
 
 > Final Project — Design a Long-Running Agent Workflow for a Finance Task
-> 选题:组合监控与再平衡 Agent(Portfolio Monitoring & Rebalancing Agent)
+> Topic: Portfolio Monitoring & Rebalancing Agent
 
-## 1.1 任务概述
+## 1.1 Task overview
 
-为一个股票/ETF 多资产投资组合构建一套长期运行的 Agent 工作流,完成从日终数据接入、风险监控、再平衡信号生成、独立复核、人工审批、沙盒执行对账到周期性规则评估的完整闭环。
+Build a long-running agent workflow for a stock/ETF multi-asset portfolio
+that closes the full loop every day: end-of-day data ingestion, risk
+monitoring, rebalancing signal generation, independent review, human
+approval, sandbox execution with reconciliation — plus a monthly rules
+evaluation on top of the accumulated history.
 
-**目标用户**:一名个人投资者 / 小型资管团队的基金经理助理。用户不追求全自动交易,而是希望有一套系统替他完成每日机械性的监控与计算,只在需要行动时给出经过复核的方案并请求批准。
+**Intended user**: an individual investor / an assistant to a small asset
+manager's portfolio manager. The user does not want fully automated
+trading; they want a system that absorbs the mechanical daily monitoring
+and arithmetic, and only surfaces a reviewed proposal when action is
+needed, waiting for their approval.
 
-## 1.2 现有流程及其问题
+## 1.2 Current process and its problems
 
-目前用户的手工流程是:
+The user's current manual process:
 
-1. 每日收盘后手动下载行情,更新持仓表
-2. 用表格计算各资产权重、回撤、行业集中度
-3. 发现越界后手动算调仓量、下单、记账
-4. 从不回顾调整规则本身是否合理
+1. After each close, download quotes by hand and update the positions sheet
+2. Compute weights, drawdown, and sector concentration in a spreadsheet
+3. On a breach, compute order quantities by hand, place orders, record them
+4. Never revisit whether the monitoring rules themselves are sensible
 
-**问题**:耗时、易漏检、无审计记录、规则调整凭感觉。这些问题的共同根源是——流程依赖**持续累积的状态**(持仓、成交、历史规则版本),且每天都重复发生。
+**Problems**: time-consuming, easy to miss breaches, no audit trail, rule
+tuning driven by gut feel. The common root cause: the process depends on
+**continuously accumulating state** (positions, fills, historical rule
+versions) and repeats every single day.
 
-## 1.3 阶段划分与依赖关系
+## 1.3 Stages and dependencies
 
-| 阶段 | 内容 | 依赖上游 | 触发方式 | 产出 |
+| Stage | Content | Depends on | Trigger | Output |
 | --- | --- | --- | --- | --- |
-| S1 数据接入 | 拉取日终行情快照(含缓存覆盖范围记录);若收件箱存在券商持仓快照则先对账 | — | 收盘后定时 / 事件插队 | 标准化行情快照 + 持仓对账结果 |
-| S2 风险监控 | 计算权重偏离、回撤、行业集中度,记录净值 | S1 | 随 S1 | 风险状态报告(含越界标记) |
-| S3 信号生成 | 对越界项生成再平衡提案(调仓方向、数量、理由) | S2 | 越界时 | 再平衡提案 |
-| S4 独立复核 | 复核方用确定性代码从原始数据重算并核对提案 | S3 | 随 S3 | 复核意见(通过/驳回) |
-| S5 人工审批 | 审批单写成 Markdown 文件并经桌面通知/webhook/邮件推送;用户用 `approve` 命令批复,流程异步续跑 | S4 通过 | 待人工(异步,不阻塞进程) | 审批记录(含提案哈希) |
-| S6 执行与对账 | T 日批准 → 挂待执行订单;T+1 日按当日价格沙盒成交、核对成交、原子化更新持仓与现金 | S5 | 批准后次日 | 待执行订单、成交日志、对账报告、新持仓状态 |
-| S7 规则评估 | 评估当前规则月度表现,对固定基线回放候选参数,提出改参建议 | S2–S6 的历史累积 | 每月末 | 规则评估报告、改参提案(附回测证据) |
+| S1 Ingestion | Pull the EOD market snapshot (with cache-coverage record); if a broker positions snapshot is in the inbox, reconcile it first | — | Scheduled after close / event-driven | Standardized market snapshot + reconciliation result |
+| S2 Risk monitoring | Weights, drift, drawdown, sector concentration; record equity | S1 | With S1 | Risk report (with breach flags) |
+| S3 Signal generation | Turn breaches into a rebalance proposal (side, quantity, rationale) | S2 | On breach | Rebalance proposal |
+| S4 Independent review | Reviewer recomputes everything from raw data and checks the proposal | S3 | With S3 | Review verdict (pass/fail) |
+| S5 Human approval | Approval request written to disk and pushed (desktop/webhook/email); operator decides with the `approve` command; the run resumes asynchronously | S4 pass | Awaits human (async, non-blocking) | Approval record (with proposal hash) |
+| S6 Execution & reconciliation | Day-T approval → pending order; on T+1 fill at that day's price, reconcile, update positions/cash atomically | S5 | Day after approval | Pending orders, fill log, reconciliation report, new positions |
+| S7 Rules evaluation | Evaluate the month's rule performance, replay candidates against a fixed baseline, propose parameter changes | Accumulated S2–S6 history | Last trading day of month | Evaluation report + change proposal (with replay evidence) |
 
-**依赖要点**:S2→S6 是逐日流水,每条都依赖前一日的持仓状态(持仓与现金只通过 S6 的成交原子化更新);S7 依赖长期累积的净值序列、越界记录与成交历史,是典型的跨周期依赖。
+**Dependency notes**: S2→S6 is a daily pipeline where each day depends on
+the previous day's position state (positions and cash change only through
+S6 fills). S7 depends on the accumulated equity curve, breach history, and
+fill history — a classic cross-period dependency.
 
-## 1.4 触发条件
+## 1.4 Triggers
 
-- **定时触发**:交易日收盘后 T 分钟自动启动 S1(参考实现:美股 16:30 ET;演示用 `replay` 命令按交易日历顺序触发)
-- **事件触发**:持仓标的出现公告/公司行动时插队执行一次 S1–S2(`run-day` 命令即手动等价物)
-- **周期触发**:每月最后一个交易日启动 S7(`replay --with-rules-eval` 在月界自动触发)
-- **手动触发**:用户随时可发起一次完整流程或对某日单独重跑;因检查点机制,重跑自动跳过已完成阶段
+- **Scheduled**: S1 starts T minutes after the close on trading days
+  (production reference: 16:30 US/Eastern; the demo uses `replay` to drive
+  the trading calendar)
+- **Event-driven**: an announcement/corporate action on a holding inserts
+  an extra S1–S2 pass (`run-day` is the manual equivalent)
+- **Periodic**: S7 starts on the last trading day of each month
+  (`replay --with-rules-eval` fires it at month boundaries)
+- **Manual**: the user can launch a full run or re-run a single day at any
+  time; checkpoints make re-runs skip completed stages automatically
 
-## 1.5 输入与允许的数据源
+## 1.5 Inputs and permitted data sources
 
-- 行情数据:**东方财富 push2his K 线 API**(公开可查询的网络行情数据库,前复权日线),首次拉取后写入本地 CSV 缓存;回放与测试只读缓存
-- 持仓数据:**券商持仓快照对账**——用户将券商导出的持仓 CSV(`symbol,qty` + 可选 `CASH` 行)放入收件箱 `data/inbox/<日期>_positions.csv`,S1 先与状态库对账:一致才放行;不一致说明发生了工作流外的操作(手动交易、分红、拆股),流程停止并升级,由人工用 `import-positions` 把外部变动记为只追加的 `adjustments` 调整记录后恢复。生产环境可替换为券商只读持仓 API(只读行情权限 + 沙盒交易权限)
-- 状态事实来源:本工作流自身的 SQLite 状态库始终是唯一事实来源;外部快照只是对账输入,不会悄悄覆盖状态
-- 公司公告与行动:交易所公告、公开信息(参考实现未接入,设计中预留事件触发入口;分红/拆股经 `adjustments` 入账)
-- **明确排除**:社交媒体舆情、付费终端的非授权数据
+- **Market data**: the East Money push2his kline API (a publicly queryable
+  market-data database; forward-adjusted daily bars), pulled once into a
+  local CSV cache; replay and tests read the cache only
+- **Positions data**: broker positions snapshot reconciliation — the user
+  drops a broker export CSV (`symbol,qty` plus an optional `CASH` row)
+  into the inbox `data/inbox/<date>_positions.csv`; S1 reconciles it
+  against recorded state before proceeding. A mismatch means something
+  happened outside the workflow (manual trade, dividend, split): the
+  pipeline stops and escalates, and a human books the external change as
+  append-only `adjustments` via `import-positions`. Production
+  replacement: a read-only broker positions API
+- **Source of truth**: the workflow's own SQLite store is always the
+  single source of truth; external snapshots are reconciliation inputs and
+  never silently overwrite state
+- **Announcements / corporate actions**: exchange announcements, public
+  information (not wired into the reference implementation; the event
+  trigger entry point is reserved, and dividends/splits are booked via
+  `adjustments`)
+- **Explicitly excluded**: social-media sentiment, unauthorized data from
+  paid terminals
 
-## 1.6 信息截止点
+## 1.6 Information cutoffs
 
-- 任何决策只允许使用决策时点**之前**可得的数据。日终批处理以当日收盘数据为截止。
-- **决策与执行时点严格分离**:T 日收盘后用 T 日数据生成并批准提案,T+1 日才按 T+1 价格成交——用收盘价做的决策不可能按同一收盘价成交,待执行订单模型从机制上消除了这一隐性未来函数。对账报告逐笔披露批准参考价与实际成交价的差异。
-- 实现上,数据层(`datafeed.load` / `price_on`)是所有数据读取的唯一入口,强制 `as_of` 参数,永不返回晚于截止日的行;对非交易日直接报错而非回退到旧价格。`tests/test_no_leakage.py` 用多个日期抽查此性质。
-- S7 的基线回放按"当日实际可知"重建历史状态:窗口起点的持仓由**反向回滚窗口内已记录成交**精确重建,回放逐日以当日为截止读取行情,且模拟成交同样采用 T+1 待执行订单模型,与生产路径口径一致,禁止未来数据。
+- Decisions may only use data available **before** the decision point. The
+  daily batch is cut off at that day's close.
+- **Decision and execution are strictly separated in time**: proposals are
+  generated and approved after the day-T close using day-T data, and fill
+  at day-T+1 prices — a decision made with close data can never fill at
+  that same close. The pending-order model eliminates this implicit
+  look-ahead by construction. The reconciliation discloses, per fill, the
+  approval-day reference price versus the actual fill price.
+- Implementation: the data layer (`datafeed.load` / `price_on`) is the
+  single entry point for all market reads; it requires an explicit `as_of`
+  and never returns later rows; a non-trading day raises instead of
+  silently falling back to stale prices. `tests/test_no_leakage.py`
+  spot-checks this across multiple dates.
+- S7 baseline replays reconstruct history as knowable at the time: the
+  window-start portfolio is rebuilt exactly by **reversing the recorded
+  fills and adjustments inside the window**, each replay day reads prices
+  cut off at that day, and simulated fills use the same T+1 pending-order
+  model as the live path — no future data.
 
-## 1.7 工作产物
+## 1.7 Work products
 
-1. **每日日终风险报告**(Markdown，自动渲染至 `runs/reports/<日期>.md`):组合概览(净值、权重、回撤)、越界告警、处置结果(含三连套状态)与审计链哈希;平安日一行"无需行动",越界日展开完整处置明细
-2. 再平衡提案 + 复核意见 + 审批记录(三连套 JSON，哈希链式关联，可审计)
-3. 成交与对账日志(S6 产出，含执行后持仓)
-4. 持仓与规则参数的版本历史(SQLite，规则版本只追加、可回滚)
-5. **每月规则评估报告**(Markdown,`runs/reports/<月份>_rules.md`):固定基线回放对比表 + 改参结论
+1. **Daily end-of-day risk report** (Markdown, auto-rendered to
+   `runs/reports/<date>.md`): portfolio overview (value, weights,
+   drawdown), breach alerts, action outcome (including the
+   proposal/review/approval chain), and the audit-chain hashes; quiet days
+   get a one-line "no action needed", breach days expand to full detail
+2. Rebalance proposal + review verdict + approval record (the three-part
+   chain as JSON, linked by content hashes, auditable)
+3. Fill and reconciliation log (S6 output, including post-fill positions)
+4. Versioned history of positions and rule parameters (SQLite; rule
+   versions are append-only and rollback-capable)
+5. **Monthly rules-evaluation report** (Markdown,
+   `runs/reports/<month>_rules.md`): fixed-baseline replay comparison
+   table + change conclusion
 
-## 1.8 验收标准(可量化)
+## 1.8 Acceptance criteria (quantified)
 
-- 每日流程在收盘后 **2** 小时内完成(`limits.daily_deadline_minutes: 120`);单阶段失败自动重试不超过 **3** 次,指数退避,超限即报错升级
-- 风险越界漏检率为 0:S4 独立复核从原始数据重算全部权重与越界,任何与提案不一致即判 fail 并阻断 S5/S6
-- 任何一笔下单都有对应的审批记录,且方向、数量与审批提案逐一相等(`tests/test_review_gate.py` 验证;审批记录含提案内容哈希,提案被篡改则哈希不匹配、拒绝挂单);批准参考价与次日实际成交价的差异逐笔披露于对账报告
-- 流程中断恢复后,已完成阶段不重复执行(`tests/test_recovery.py` 与 `docs/evidence/recovery.log` 验证:崩溃后续跑时已完成阶段 attempts 保持 1)
-- 规则改参提案必须附带对固定基线的回放结果(基线 = 同窗口买入持有 + 当前规则模拟)才能进入审批;审批通过记为新版本,可一键回滚
+- The daily pipeline finishes within **2** hours of its trigger
+  (`limits.daily_deadline_minutes: 120`); a failing stage retries at most
+  **3** times with exponential backoff, then errors out and escalates
+- Zero missed risk breaches: S4 independently recomputes all weights and
+  breaches from raw data; any disagreement with the proposal fails the
+  review and blocks S5/S6
+- Every order maps to an approval record, with side and quantity matching
+  the approved proposal one-to-one (`tests/test_review_gate.py`; the
+  approval stores the proposal's content hash — a tampered proposal no
+  longer hashes to the approved value and is refused). Approval-day
+  reference price versus next-day fill price is disclosed per fill in the
+  reconciliation
+- After an interrupted run resumes, completed stages are never re-executed
+  (`tests/test_recovery.py` and `docs/evidence/recovery.log`: after a
+  crash, resumed stages keep `attempts = 1`)
+- A rule-change proposal may enter approval only with fixed-baseline
+  replay results attached (baseline = buy-and-hold over the same window
+  plus a replay of the current rules); approval writes a new version,
+  rollback is one command
 
-## 1.9 为什么需要持久化工作流,而非一次性脚本
+## 1.9 Why a persistent workflow, not a one-shot script
 
-三个理由,对应作业的硬性要求:
+Three reasons, matching the project's hard requirements:
 
-1. **状态累积**:持仓、审批记录、规则版本跨天、跨月持续演化,一次性脚本没有"昨天"的概念
-2. **周期触发**:任务由日历和事件驱动,必须有人值守地反复启动
-3. **中断恢复**:一次运行跨越多个有副作用的阶段(下单、改持仓),中途崩溃后必须基于持久化检查点精确续跑,而非从头再来——这正是检查点与幂等设计存在的理由
+1. **State accumulation**: positions, approvals, and rule versions evolve
+   across days and months; a one-shot script has no concept of "yesterday"
+2. **Recurring triggers**: the task is driven by the calendar and by
+   events; something must start it unattended, repeatedly
+3. **Recovery**: one run spans multiple side-effecting stages (orders,
+   position writes); after a crash mid-run, execution must resume
+   precisely from durable checkpoints rather than start over — that is
+   exactly why checkpoint and idempotency design exists
