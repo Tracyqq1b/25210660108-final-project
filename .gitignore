@@ -220,3 +220,4 @@ __marimo__/
 .streamlit/secrets.toml
 runs/
 data/inbox/
+.DS_Store
